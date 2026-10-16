@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/backend/" />
+  <Folder Name="/backend/src/">
+    <Project Path="backend/src/Northstar.Api/Northstar.Api.csproj" />
+    <Project Path="backend/src/Northstar.Application/Northstar.Application.csproj" />
+    <Project Path="backend/src/Northstar.Domain/Northstar.Domain.csproj" />
+    <Project Path="backend/src/Northstar.Infrastructure/Northstar.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/backend/tests/">
+    <Project Path="backend/tests/Northstar.Api.IntegrationTests/Northstar.Api.IntegrationTests.csproj" />
+    <Project Path="backend/tests/Northstar.Application.Tests/Northstar.Application.Tests.csproj" />
+    <Project Path="backend/tests/Northstar.Domain.Tests/Northstar.Domain.Tests.csproj" />
+  </Folder>
+</Solution>

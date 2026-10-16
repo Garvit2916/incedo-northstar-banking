@@ -1,0 +1,116 @@
+using Microsoft.EntityFrameworkCore;
+using Northstar.Application.Common;
+using Northstar.Application.Contracts;
+using Northstar.Domain;
+using Northstar.Domain.Entities;
+
+namespace Northstar.Application.Tests;
+
+/// <summary>Covers notification enqueueing, per-user scoping and read bookkeeping.</summary>
+public sealed class NotificationServiceTests : IDisposable
+{
+    private readonly ServiceFixture _fx = new();
+
+    public void Dispose() => _fx.Dispose();
+
+    [Fact]
+    public async Task Enqueueing_creates_a_notification_and_an_outbox_row()
+    {
+        var user = _fx.SeedUser();
+        _fx.Caller.UserId = user.Id;
+
+        _fx.Notifications.EnqueueNotification(
+            user.Id, null, NotificationType.General, "Welcome", "Your account is ready.", "test-key-1");
+        await _fx.Db.SaveChangesAsync();
+
+        var notification = Assert.Single(await _fx.Db.Notifications.AsNoTracking().ToListAsync());
+        Assert.Equal(user.Id, notification.UserId);
+        Assert.Equal(NotificationType.General, notification.Type);
+        Assert.False(notification.IsRead);
+        Assert.Null(notification.ReadAtUtc);
+
+        var outbox = Assert.Single(await _fx.Db.OutboxMessages.AsNoTracking().ToListAsync());
+        Assert.Equal("email.notification", outbox.Type);
+        Assert.Equal("test-key-1", outbox.IdempotencyKey);
+        Assert.Equal(OutboxStatus.Pending, outbox.Status);
+    }
+
+    [Fact]
+    public async Task Unread_counts_and_listings_are_scoped_to_the_caller()
+    {
+        var mine = _fx.SeedUser().Id;
+        var other = _fx.SeedUser().Id;
+
+        SeedNotification(mine, isRead: false);
+        SeedNotification(mine, isRead: false);
+        SeedNotification(mine, isRead: true);
+        SeedNotification(other, isRead: false);
+        SeedNotification(other, isRead: false);
+
+        _fx.Caller.UserId = mine;
+        var service = _fx.Notifications;
+
+        Assert.Equal(2, await service.GetUnreadCountAsync(default));
+
+        var all = await service.ListMineAsync(new PageQuery(1, 10), onlyUnread: false, default);
+        Assert.Equal(3, all.TotalCount);
+        Assert.Equal(3, all.Items.Count);
+
+        var unreadOnly = await service.ListMineAsync(new PageQuery(1, 10), onlyUnread: true, default);
+        Assert.Equal(2, unreadOnly.TotalCount);
+    }
+
+    [Fact]
+    public async Task Marking_another_users_notification_read_throws_not_found()
+    {
+        var foreign = SeedNotification(_fx.SeedUser().Id, isRead: false);
+
+        _fx.Caller.UserId = _fx.SeedUser().Id;
+
+        await Assert.ThrowsAsync<NotFoundException>(
+            () => _fx.Notifications.MarkReadAsync(foreign.Id, default));
+
+        var stored = await _fx.Db.Notifications.AsNoTracking().SingleAsync(n => n.Id == foreign.Id);
+        Assert.False(stored.IsRead);
+        Assert.Null(stored.ReadAtUtc);
+    }
+
+    [Fact]
+    public async Task Marking_all_read_returns_the_number_marked_and_clears_the_unread_count()
+    {
+        var userId = _fx.SeedUser().Id;
+        SeedNotification(userId, isRead: false);
+        SeedNotification(userId, isRead: false);
+        SeedNotification(userId, isRead: false);
+
+        _fx.Caller.UserId = userId;
+        var service = _fx.Notifications;
+
+        Assert.Equal(3, await service.MarkAllReadAsync(default));
+        Assert.Equal(0, await service.GetUnreadCountAsync(default));
+
+        // Idempotent: a second sweep marks nothing further.
+        Assert.Equal(0, await service.MarkAllReadAsync(default));
+        Assert.All(await _fx.Db.Notifications.AsNoTracking().ToListAsync(),
+            n => Assert.NotNull(n.ReadAtUtc));
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    private Notification SeedNotification(Guid userId, bool isRead)
+    {
+        var notification = new Notification
+        {
+            UserId = userId,
+            Type = NotificationType.General,
+            Title = "Update",
+            Body = "A demonstration notification.",
+            IsRead = isRead,
+            ReadAtUtc = isRead ? _fx.Clock.UtcNow : null
+        };
+
+        _fx.Db.Notifications.Add(notification);
+        _fx.Db.SaveChanges();
+        return notification;
+    }
+}

@@ -1,0 +1,40 @@
+# Local full-stack run: API (SQLite + local storage) behind an nginx-served SPA.
+#
+#   docker compose up --build
+#   web -> http://localhost:5173      api -> http://localhost:8080
+#
+# Verified: images build, both containers come up healthy, and scripts/smoke.ps1
+# passes 73/73 against the containerised API.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      Database__Provider: Sqlite
+      ConnectionStrings__Default: "Data Source=/data/northstar.db"
+      Storage__Provider: Local
+      Storage__LocalRootPath: /data/kyc
+      Seed__Enabled: "true"
+    volumes:
+      - northstar-data:/data
+    ports:
+      - "8080:8080"
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        # Set to "true" to surface the seeded demo logins on the sign-in page of
+        # this local stack. Leave unset/false for anything that is exposed.
+        VITE_ENABLE_DEMO_ACCOUNTS: "true"
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+
+volumes:
+  northstar-data:
