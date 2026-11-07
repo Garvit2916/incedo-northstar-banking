@@ -24,6 +24,7 @@ products and the audit trail.
 - [Prerequisites](#prerequisites)
 - [Run the API](#run-the-api)
 - [Run the web app](#run-the-web-app)
+- [Web experience](#web-experience)
 - [Seeded accounts](#seeded-accounts)
 - [Testing & verification](#testing--verification)
 - [Configuration](#configuration)
@@ -70,6 +71,7 @@ See [`docs/architecture.md`](docs/architecture.md) for the full breakdown,
 - **.NET 10** (ASP.NET Core, EF Core 10, ASP.NET Identity) — API.
 - **SQLite** (development) / **SQL Server** (production profile) via EF Core migrations.
 - **React 18 + TypeScript + Vite** — single-page web client.
+- **CSS custom-property design system** — shared tokens, components, layout and page styles with no UI framework dependency.
 - **JWT** bearer auth with rotating refresh tokens.
 - **xUnit** — unit and integration tests (`WebApplicationFactory`).
 - **Vitest** — frontend unit tests for the client-side policy mirrors.
@@ -91,6 +93,9 @@ $env:ASPNETCORE_ENVIRONMENT = "Development"
 $env:ASPNETCORE_URLS        = "http://localhost:5199"
 dotnet run --project backend/src/Northstar.Api --no-launch-profile
 ```
+
+> If `dotnet` is not recognised, prepend it for the session:
+> `$env:PATH = "C:\Program Files\dotnet;" + $env:PATH`.
 
 - The database (SQLite, `northstar.db`) is created and migrated automatically on
   startup and seeded with the demonstration data below.
@@ -135,6 +140,26 @@ Production build:
 cd frontend
 npm run build   # tsc --noEmit && vite build  ->  frontend/dist
 ```
+
+## Web experience
+
+The SPA is a responsive, role-aware banking workspace. Navigation, dashboards
+and actions adapt to the signed-in role while the API remains the source of
+truth for authorization and workflow rules.
+
+| Area | Highlights |
+| --- | --- |
+| Sign-in | Split marketing/auth layout, registration and password reset, development-only demo account picker. |
+| Customer | Role-aware dashboard, product catalogue with details, guided application wizard, profile completion, document upload, notifications and status tracking. |
+| Operations | Review queue and decision workspace, ticket queue and conversation view, internal notes, assignment, status changes and AI assistance with provenance labels. |
+| Administration | User role management, product catalogue administration and a filterable audit trail. |
+| Shared UX | Dark navigation rail, breadcrumb header, toasts, dialogs, skeleton loading, empty states, tables, pagination and accessible form validation. |
+
+The visual system uses an ink/teal/brass palette with CSS custom properties.
+Styles are split into `tokens.css`, `base.css`, `components.css`, `layout.css`
+and `pages.css`, imported through `frontend/src/styles.css`. Shared primitives
+live in `components/ui.tsx` and `components/forms.tsx`; page-specific
+compositions stay in the page files.
 
 ## Seeded accounts
 
@@ -270,7 +295,13 @@ reviewed by a human.
 │       ├── Northstar.Application.Tests/
 │       └── Northstar.Api.IntegrationTests/
 ├── frontend/                          # React + TypeScript + Vite SPA
-│   └── src/{api,auth,components,lib,pages}/
+│   └── src/
+│       ├── api/                       # typed API client, DTOs and endpoints
+│       ├── auth/                      # auth context and role guards
+│       ├── components/                # shared UI, forms, icons, layout, dialogs
+│       ├── lib/                       # formatting, uploads, async and policy helpers
+│       ├── pages/                     # customer, operations and admin screens
+│       └── styles/                    # tokens, base, components, layout, pages
 ├── docs/                              # architecture, API and testing notes
 ├── scripts/smoke.ps1                  # live end-to-end regression suite
 ├── infra/                             # reserved for infrastructure-as-code
