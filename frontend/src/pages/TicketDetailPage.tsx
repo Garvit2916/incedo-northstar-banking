@@ -1,16 +1,27 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { ticketsApi } from '../api/endpoints';
 import { ApiError } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
-import { Badge, Card, EmptyState, ErrorBanner, InfoBanner, Spinner } from '../components/ui';
+import { Icon } from '../components/icons';
+import type { IconName } from '../components/icons';
+import {
+  Card,
+  EmptyState,
+  ErrorBanner,
+  InfoBanner,
+  Spinner,
+  StatusBadge,
+} from '../components/ui';
 import { useToast } from '../components/Toast';
 import { useAsync } from '../lib/useAsync';
-import { formatDate, humanise } from '../lib/format';
+import { formatDate, formatRelative, humanise } from '../lib/format';
 import type {
+  AiProvenance,
   AiSentimentResponse,
   AiSuggestedResponse,
   AiSummaryResponse,
+  MessageAuthorType,
   NextBestActionsResponse,
   TicketStatus,
 } from '../api/types';
@@ -25,32 +36,66 @@ const STATUS_OPTIONS: TicketStatus[] = [
   'Closed',
 ];
 
+type AiFeature = 'summary' | 'suggestion' | 'sentiment' | 'actions';
+
+const AI_ACTIONS: { key: AiFeature; label: string; icon: IconName; busyLabel: string }[] = [
+  { key: 'summary', label: 'Summarise ticket', icon: 'list', busyLabel: 'Summarising…' },
+  { key: 'suggestion', label: 'Suggest reply', icon: 'sparkles', busyLabel: 'Drafting…' },
+  { key: 'sentiment', label: 'Read sentiment', icon: 'heart', busyLabel: 'Analysing…' },
+  { key: 'actions', label: 'Next best actions', icon: 'trendingUp', busyLabel: 'Thinking…' },
+];
+
+function messageClass(authorType: MessageAuthorType, isInternalNote: boolean): string {
+  if (isInternalNote) return 'message message--internal';
+  if (authorType === 'Customer') return 'message message--customer';
+  if (authorType === 'Agent') return 'message message--agent';
+  return 'message message--system';
+}
+
+function authorLabel(authorType: MessageAuthorType): string {
+  if (authorType === 'Customer') return 'Customer';
+  if (authorType === 'Agent') return 'Support agent';
+  return 'System';
+}
+
 export function TicketDetailPage() {
   const { id = '' } = useParams();
-  const { user } = useAuth();
+  const { user, hasRole } = useAuth();
   const { data, loading, error, reload } = useAsync(() => ticketsApi.get(id), [id]);
+  const toast = useToast();
 
   const [message, setMessage] = useState('');
   const [internalNote, setInternalNote] = useState(false);
   const [status, setStatus] = useState<TicketStatus | ''>('');
   const [busy, setBusy] = useState(false);
-  const toast = useToast();
 
   const [summary, setSummary] = useState<AiSummaryResponse | null>(null);
   const [suggestion, setSuggestion] = useState<AiSuggestedResponse | null>(null);
   const [sentiment, setSentiment] = useState<AiSentimentResponse | null>(null);
   const [actions, setActions] = useState<NextBestActionsResponse | null>(null);
-  const [aiBusy, setAiBusy] = useState<string | null>(null);
+  const [aiBusy, setAiBusy] = useState<AiFeature | null>(null);
 
   if (loading) {
-    return <Spinner />;
+    return (
+      <div className="page">
+        <Spinner label="Loading ticket…" />
+      </div>
+    );
   }
 
   if (error || !data) {
-    return <ErrorBanner message={error ?? 'Ticket not found.'} />;
+    return (
+      <div className="page">
+        <ErrorBanner message={error ?? 'Ticket not found.'} onRetry={reload} />
+        <Link to="/tickets" className="btn btn-secondary section-gap">
+          Back to tickets
+        </Link>
+      </div>
+    );
   }
 
   const currentStatus = status || data.status;
+  const isAssignedToMe = Boolean(user && data.assignedAgentId === user.id);
 
   async function runAction(action: () => Promise<unknown>, successMessage: string) {
     setBusy(true);
@@ -65,8 +110,8 @@ export function TicketDetailPage() {
     }
   }
 
-  async function runAi(label: string, action: () => Promise<void>) {
-    setAiBusy(label);
+  async function runAi(feature: AiFeature, action: () => Promise<void>) {
+    setAiBusy(feature);
     try {
       await action();
     } catch (err) {
@@ -78,9 +123,7 @@ export function TicketDetailPage() {
 
   async function handleSend() {
     const body = message.trim();
-    if (!body) {
-      return;
-    }
+    if (!body) return;
     setBusy(true);
     try {
       await ticketsApi.addMessage(data!.id, body, internalNote);
@@ -95,55 +138,115 @@ export function TicketDetailPage() {
     }
   }
 
+  function useSuggestion(text: string) {
+    setMessage(text);
+    setInternalNote(false);
+    toast.info('Suggestion inserted into the composer.');
+  }
+
+  function clearAi() {
+    setSummary(null);
+    setSuggestion(null);
+    setSentiment(null);
+    setActions(null);
+  }
+
+  const hasAiOutput = Boolean(summary || suggestion || sentiment || actions);
+  const sentimentConfidence =
+    sentiment?.confidence == null
+      ? null
+      : Math.round(sentiment.confidence <= 1 ? sentiment.confidence * 100 : sentiment.confidence);
+
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>{data.reference}</h1>
-          <p className="muted">
-            {data.subject} · <Badge value={data.status} /> · <Badge value={data.priority} />
+      <header className="detail-hero">
+        <div className="detail-hero-main">
+          <p className="eyebrow">Support ticket</p>
+          <div className="detail-reference">
+            <h1>{data.reference}</h1>
+            <StatusBadge value={data.status} />
+            <StatusBadge value={data.priority} dot={false} />
+          </div>
+          <p className="text-strong" style={{ fontWeight: 600 }}>{data.subject}</p>
+          <p className="muted text-sm">
+            {humanise(data.category)} · Opened {formatDate(data.createdAtUtc)} · Updated{' '}
+            {formatRelative(data.updatedAtUtc)}
           </p>
+        </div>
+        <div className="detail-hero-actions">
+          <Link to="/tickets" className="btn btn-ghost">
+            <Icon name="arrowLeft" size={16} />
+            All tickets
+          </Link>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy || isAssignedToMe || !user}
+            onClick={() =>
+              user && void runAction(() => ticketsApi.assign(data.id, user.id), 'Ticket assigned to you.')
+            }
+          >
+            <Icon name="userPlus" size={16} />
+            {isAssignedToMe ? 'Assigned to you' : 'Assign to me'}
+          </button>
         </div>
       </header>
 
-      <div className="ticket-layout">
-        <div className="ticket-main">
-          <Card title="Conversation">
+      <div className="workspace">
+        <div className="workspace-main">
+          <Card title="Conversation" subtitle={`${data.messages.length} message${data.messages.length === 1 ? '' : 's'}`} flush>
             {data.messages.length === 0 ? (
-              <EmptyState message="No messages yet." />
+              <EmptyState icon="message" message="No messages yet." />
             ) : (
-              <ul className="message-list">
+              <div className="conversation">
                 {data.messages.map((item) => (
-                  <li
-                    key={item.id}
-                    className={item.isInternalNote ? 'message internal' : 'message'}
-                  >
-                    <div className="message-head">
-                      <strong>{humanise(item.authorType)}</strong>
-                      {item.isInternalNote && <span className="badge badge-internal">Internal note</span>}
-                      <span className="muted">{formatDate(item.createdAtUtc)}</span>
+                  <div key={item.id} className={messageClass(item.authorType, item.isInternalNote)}>
+                    <span className="message-avatar" aria-hidden="true">
+                      <Icon
+                        name={item.isInternalNote ? 'lock' : item.authorType === 'Customer' ? 'profile' : 'support'}
+                        size={15}
+                      />
+                    </span>
+                    <div className="message-bubble">
+                      <div className="message-head">
+                        <span className="message-author">
+                          {item.isInternalNote ? 'Internal note' : authorLabel(item.authorType)}
+                        </span>
+                        <span className="message-time">{formatDate(item.createdAtUtc)}</span>
+                        {item.isInternalNote && <span className="badge badge--warning">Internal</span>}
+                      </div>
+                      <div className="message-body">{item.body}</div>
                     </div>
-                    <p>{item.body}</p>
-                  </li>
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
 
             <div className="composer">
+              <label className="sr-only" htmlFor="ticket-reply">
+                Reply
+              </label>
               <textarea
+                id="ticket-reply"
                 rows={3}
-                placeholder="Write a reply or internal note…"
+                placeholder="Write a reply or internal note. Press Ctrl + Enter to send."
                 value={message}
-                onChange={(e) => setMessage(e.target.value)}
+                onChange={(event) => setMessage(event.target.value)}
+                onKeyDown={(event) => {
+                  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                    event.preventDefault();
+                    void handleSend();
+                  }
+                }}
               />
               <div className="composer-actions">
                 <label className="checkbox">
                   <input
                     type="checkbox"
                     checked={internalNote}
-                    onChange={(e) => setInternalNote(e.target.checked)}
+                    onChange={(event) => setInternalNote(event.target.checked)}
                   />
-                  Internal note
+                  Internal note (not visible to the customer)
                 </label>
                 <button
                   type="button"
@@ -151,37 +254,243 @@ export function TicketDetailPage() {
                   disabled={busy || message.trim().length === 0}
                   onClick={() => void handleSend()}
                 >
-                  Send
+                  <Icon name={internalNote ? 'lock' : 'send'} size={15} />
+                  {internalNote ? 'Add note' : 'Send reply'}
                 </button>
+              </div>
+            </div>
+          </Card>
+
+          <Card title="AI assistance" subtitle="Grounded on this ticket's conversation">
+            <div className="ai-card" style={{ border: 0, padding: 0, background: 'transparent', boxShadow: 'none' }}>
+              <div className="ai-actions">
+                {AI_ACTIONS.map((feature) => (
+                  <button
+                    key={feature.key}
+                    type="button"
+                    className="ai-action"
+                    disabled={aiBusy !== null}
+                    onClick={() =>
+                      void runAi(feature.key, async () => {
+                        if (feature.key === 'summary') setSummary(await ticketsApi.ai.summarize(data.id));
+                        if (feature.key === 'suggestion') setSuggestion(await ticketsApi.ai.suggestResponse(data.id));
+                        if (feature.key === 'sentiment') setSentiment(await ticketsApi.ai.analyzeSentiment(data.id));
+                        if (feature.key === 'actions') setActions(await ticketsApi.ai.nextBestActions(data.id));
+                      })
+                    }
+                  >
+                    <span className="ai-action-top">
+                      <Icon name={aiBusy === feature.key ? 'loader' : feature.icon} size={16} />
+                      {feature.label}
+                    </span>
+                    <span className="muted text-xs">
+                      {aiBusy === feature.key ? feature.busyLabel : 'Run analysis'}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="ai-output" aria-live="polite">
+                {!hasAiOutput ? (
+                  <div className="ai-empty">
+                    <Icon name="sparkles" size={18} />
+                    Run an AI action to see a summary, suggested reply, sentiment analysis or next best
+                    actions. AI output is advisory and always requires human review.
+                  </div>
+                ) : (
+                  <>
+                    {summary && (
+                      <div className="ai-result">
+                        <div className="ai-result-head">
+                          <h3>Summary</h3>
+                          <Provenance provenance={summary.provenance} />
+                        </div>
+                        <div className="ai-result-body">
+                          <p>{summary.mainIssue}</p>
+                          <div className="ai-kv">
+                            <span>Current state</span>
+                            <strong>{summary.currentState}</strong>
+                          </div>
+                          <AiList title="Key context" items={summary.keyContext} />
+                          <AiList title="Actions taken" items={summary.actionsTaken} />
+                          <AiList title="Outstanding" items={summary.outstandingItems} />
+                          <AiList title="Uncertainties" items={summary.uncertainties} />
+                        </div>
+                      </div>
+                    )}
+
+                    {suggestion && (
+                      <div className="ai-result">
+                        <div className="ai-result-head">
+                          <h3>Suggested reply</h3>
+                          <Provenance provenance={suggestion.provenance} />
+                        </div>
+                        <div className="ai-result-body">
+                          <p className="text-xs muted">Subject: {suggestion.subject}</p>
+                          <div className="ai-suggestion">
+                            <pre>{suggestion.body}</pre>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => useSuggestion(suggestion.body)}
+                            >
+                              <Icon name="copy" size={14} />
+                              Use in composer
+                            </button>
+                          </div>
+                          {suggestion.notes.length > 0 && <AiList title="Notes" items={suggestion.notes} />}
+                        </div>
+                      </div>
+                    )}
+
+                    {sentiment && (
+                      <div className="ai-result">
+                        <div className="ai-result-head">
+                          <h3>Sentiment</h3>
+                          <Provenance provenance={sentiment.provenance} />
+                        </div>
+                        <div className="ai-result-body">
+                          <div className="sentiment-meter">
+                            <div className="sentiment-head">
+                              <span className="sentiment-label">{humanise(sentiment.label)}</span>
+                              {sentimentConfidence !== null && (
+                                <span className="muted text-xs">{sentimentConfidence}% confidence</span>
+                              )}
+                            </div>
+                            {sentimentConfidence !== null && (
+                              <div className="confidence">
+                                <div className="confidence-track">
+                                  <div
+                                    className="confidence-bar"
+                                    style={{ width: `${Math.min(100, Math.max(0, sentimentConfidence))}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                            <p>{sentiment.explanation}</p>
+                          </div>
+                          {sentiment.signals.length > 0 && (
+                            <div className="chip-row section-gap">
+                              {sentiment.signals.map((signal, index) => (
+                                <span className="chip" key={index}>
+                                  {signal}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {sentiment.escalationRecommended && (
+                            <InfoBanner
+                              tone="warning"
+                              title="Escalation recommended"
+                              message="The customer appears frustrated or the issue is high risk. Consider escalating this ticket."
+                            />
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {actions && (
+                      <div className="ai-result">
+                        <div className="ai-result-head">
+                          <h3>Next best actions</h3>
+                          <Provenance provenance={actions.provenance} />
+                        </div>
+                        <div className="ai-result-body">
+                          <ol className="nba-list">
+                            {actions.actions.map((action, index) => (
+                              <li className="nba-item" key={index}>
+                                <span className="nba-rank">{index + 1}</span>
+                                <div>
+                                  <div className="nba-head">
+                                    <strong>{action.action}</strong>
+                                    <StatusBadge value={action.priority} dot={false} />
+                                    {action.requiresHumanApproval && (
+                                      <span className="badge badge--warning">Needs approval</span>
+                                    )}
+                                  </div>
+                                  <p>{action.reason}</p>
+                                  <p className="nba-evidence">
+                                    <Icon name="info" size={12} /> Evidence: {action.evidence}
+                                  </p>
+                                </div>
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="section-head">
+                      <span className="muted text-xs">{summary?.provenance.disclaimer ?? 'AI output requires human review.'}</span>
+                      <button type="button" className="link-button text-xs" onClick={clearAi}>
+                        Clear results
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </Card>
         </div>
 
-        <aside className="ticket-side">
-          <Card title="Assignment & status">
+        <aside className="workspace-side">
+          <Card title="Ticket details">
             <dl className="meta">
               <div>
+                <dt>Status</dt>
+                <dd>
+                  <StatusBadge value={data.status} />
+                </dd>
+              </div>
+              <div>
+                <dt>Priority</dt>
+                <dd>
+                  <StatusBadge value={data.priority} dot={false} />
+                </dd>
+              </div>
+              <div>
+                <dt>Category</dt>
+                <dd>{humanise(data.category)}</dd>
+              </div>
+              <div>
                 <dt>Assigned agent</dt>
-                <dd>{data.assignedAgentId ?? 'Unassigned'}</dd>
+                <dd>{isAssignedToMe ? 'You' : data.assignedAgentId ? 'Another agent' : 'Unassigned'}</dd>
               </div>
               <div>
                 <dt>SLA due</dt>
-                <dd>{formatDate(data.slaDueAtUtc)}</dd>
+                <dd>
+                  {data.slaDueAtUtc
+                    ? `${formatRelative(data.slaDueAtUtc)} · ${formatDate(data.slaDueAtUtc)}`
+                    : 'Not set'}
+                </dd>
               </div>
+              {data.resolvedAtUtc && (
+                <div>
+                  <dt>Resolved</dt>
+                  <dd>{formatDate(data.resolvedAtUtc)}</dd>
+                </div>
+              )}
             </dl>
-            <div className="stack">
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={busy || !user}
-                onClick={() => user && runAction(() => ticketsApi.assign(data.id, user.id), 'Ticket assigned to you.')}
+            {data.relatedApplicationId && (hasRole('Reviewer') || hasRole('Administrator')) && (
+              <Link
+                to={`/reviews/${data.relatedApplicationId}`}
+                className="btn btn-secondary btn-sm btn-block section-gap"
               >
-                Assign to me
-              </button>
-              <label className="field">
-                <span>Status</span>
-                <select value={currentStatus} onChange={(e) => setStatus(e.target.value as TicketStatus)}>
+                View related application
+                <Icon name="arrowUpRight" size={14} />
+              </Link>
+            )}
+          </Card>
+
+          <Card title="Update status" subtitle="Manual status changes are audited">
+            <div className="stack">
+              <label className="field" htmlFor="ticket-status">
+                <span>New status</span>
+                <select
+                  id="ticket-status"
+                  value={currentStatus}
+                  onChange={(event) => setStatus(event.target.value as TicketStatus)}
+                >
                   {STATUS_OPTIONS.map((option) => (
                     <option key={option} value={option}>
                       {humanise(option)}
@@ -191,103 +500,31 @@ export function TicketDetailPage() {
               </label>
               <button
                 type="button"
-                className="btn btn-primary"
+                className="btn btn-primary btn-block"
                 disabled={busy || currentStatus === data.status}
                 onClick={() =>
-                  runAction(() => ticketsApi.changeStatus(data.id, currentStatus as TicketStatus), 'Status updated.')
+                  void runAction(
+                    () => ticketsApi.changeStatus(data.id, currentStatus as TicketStatus),
+                    'Status updated.',
+                  )
                 }
               >
-                Update status
+                {busy ? 'Updating…' : 'Update status'}
               </button>
             </div>
           </Card>
 
-          <Card title="AI assistance">
-            <div className="stack">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={aiBusy !== null}
-                onClick={() => runAi('summarise', async () => setSummary(await ticketsApi.ai.summarize(data.id)))}
-              >
-                {aiBusy === 'summarise' ? 'Summarising…' : 'Summarise'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={aiBusy !== null}
-                onClick={() => runAi('suggest', async () => setSuggestion(await ticketsApi.ai.suggestResponse(data.id)))}
-              >
-                {aiBusy === 'suggest' ? 'Thinking…' : 'Suggest response'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={aiBusy !== null}
-                onClick={() => runAi('sentiment', async () => setSentiment(await ticketsApi.ai.analyzeSentiment(data.id)))}
-              >
-                {aiBusy === 'sentiment' ? 'Analysing…' : 'Analyse sentiment'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={aiBusy !== null}
-                onClick={() => runAi('actions', async () => setActions(await ticketsApi.ai.nextBestActions(data.id)))}
-              >
-                {aiBusy === 'actions' ? 'Working…' : 'Next best actions'}
-              </button>
-            </div>
-
-            <div aria-live="polite" className="ai-results">
-              {summary && (
-                <div className="ai-panel">
-                  <h4>Summary</h4>
-                  <p>{summary.mainIssue}</p>
-                  <AiList title="Key context" items={summary.keyContext} />
-                  <AiList title="Outstanding" items={summary.outstandingItems} />
-                  <Provenance note={summary.provenance.disclaimer} live={summary.provenance.isLiveInference} />
-                </div>
-              )}
-
-              {suggestion && (
-                <div className="ai-panel">
-                  <h4>Suggested response</h4>
-                  <p>{suggestion.body}</p>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => setMessage(suggestion.body)}
-                  >
-                    Use in composer
-                  </button>
-                  <Provenance note={suggestion.provenance.disclaimer} live={suggestion.provenance.isLiveInference} />
-                </div>
-              )}
-
-              {sentiment && (
-                <div className="ai-panel">
-                  <h4>Sentiment: {humanise(sentiment.label)}</h4>
-                  <p>{sentiment.explanation}</p>
-                  {sentiment.escalationRecommended && <InfoBanner message="Escalation recommended." />}
-                  <Provenance note={sentiment.provenance.disclaimer} live={sentiment.provenance.isLiveInference} />
-                </div>
-              )}
-
-              {actions && (
-                <div className="ai-panel">
-                  <h4>Next best actions</h4>
-                  <ul className="ai-actions">
-                    {actions.actions.map((action, index) => (
-                      <li key={index}>
-                        <strong>{action.action}</strong>
-                        <span className="muted"> ({action.priority})</span>
-                        <p>{action.reason}</p>
-                      </li>
-                    ))}
-                  </ul>
-                  <Provenance note={actions.provenance.disclaimer} live={actions.provenance.isLiveInference} />
-                </div>
-              )}
+          <Card title="Customer" subtitle="Conversation participant">
+            <div className="review-applicant">
+              <span className="stat-icon stat-icon--primary" aria-hidden="true">
+                <Icon name="profile" size={17} />
+              </span>
+              <div>
+                <strong>Customer</strong>
+                <p className="muted text-xs">
+                  {data.customerUserId ? `ID ${data.customerUserId.slice(0, 8)}` : 'Not linked'}
+                </p>
+              </div>
             </div>
           </Card>
         </aside>
@@ -297,12 +534,10 @@ export function TicketDetailPage() {
 }
 
 function AiList({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) {
-    return null;
-  }
+  if (items.length === 0) return null;
   return (
-    <div>
-      <h5>{title}</h5>
+    <div className="ai-kv">
+      <span>{title}</span>
       <ul>
         {items.map((item, index) => (
           <li key={index}>{item}</li>
@@ -312,13 +547,12 @@ function AiList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function Provenance({ note, live }: { note: string; live: boolean }) {
+function Provenance({ provenance }: { provenance: AiProvenance }) {
   return (
-    <p className="provenance">
-      <span className={live ? 'badge badge-approved' : 'badge badge-pending'}>
-        {live ? 'Live model' : 'Development fallback'}
-      </span>{' '}
-      {note}
-    </p>
+    <span className="badge badge--neutral" title={provenance.disclaimer}>
+      <Icon name={provenance.isLiveInference ? 'sparkles' : 'info'} size={12} />
+      {provenance.isLiveInference ? 'Live model' : 'Development fallback'}
+      {provenance.model ? ` · ${provenance.model}` : ''}
+    </span>
   );
 }

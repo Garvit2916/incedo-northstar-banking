@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
+import { Icon } from './icons';
 import { PASSWORD_REQUIREMENTS, evaluatePassword, passwordStrength } from '../lib/passwordPolicy';
 
 export function Field({
@@ -95,7 +96,7 @@ export function PasswordInput({
         aria-label={visible ? 'Hide password' : 'Show password'}
         onClick={() => setVisible((current) => !current)}
       >
-        {visible ? 'Hide' : 'Show'}
+        <Icon name={visible ? 'eyeOff' : 'eye'} size={16} />
       </button>
     </div>
   );
@@ -157,6 +158,37 @@ export function PasswordStrengthMeter({ password }: { password: string }) {
       <p className="strength-label" aria-live="polite">
         Password strength: <strong className={`strength-text strength-text-${strength.level}`}>{strength.label}</strong>
       </p>
+    </div>
+  );
+}
+
+export function SearchInput({
+  value,
+  onChange,
+  placeholder = 'Search…',
+  id,
+  label = 'Search',
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  id?: string;
+  label?: string;
+}) {
+  return (
+    <div className="input-group">
+      <span className="input-icon" aria-hidden="true">
+        <Icon name="search" size={16} />
+      </span>
+      <input
+        id={id}
+        className="input"
+        type="search"
+        value={value}
+        placeholder={placeholder}
+        aria-label={label}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </div>
   );
 }

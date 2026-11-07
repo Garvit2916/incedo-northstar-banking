@@ -1,67 +1,181 @@
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { applicationsApi } from '../api/endpoints';
-import { Badge, Card, EmptyState, ErrorBanner } from '../components/ui';
+import { Icon } from '../components/icons';
 import { SkeletonTable } from '../components/Skeleton';
+import { Card, EmptyState, ErrorBanner, StatusBadge } from '../components/ui';
+import { formatDateOnly, humanise, pluralise } from '../lib/format';
 import { useAsync } from '../lib/useAsync';
-import { formatDate } from '../lib/format';
+import type { ApplicationStatus } from '../api/types';
+
+const IN_PROGRESS: ApplicationStatus[] = ['Draft', 'Submitted', 'UnderReview', 'AdditionalInformationRequired'];
+const FILTER_ORDER: ApplicationStatus[] = [
+  'Draft',
+  'Submitted',
+  'UnderReview',
+  'AdditionalInformationRequired',
+  'Approved',
+  'Rejected',
+  'Withdrawn',
+];
 
 export function ApplicationsPage() {
-  const { data, loading, error } = useAsync(() => applicationsApi.listMine(), []);
+  const { data, loading, error, reload } = useAsync(() => applicationsApi.listMine(1, 100), []);
+  const [filter, setFilter] = useState<ApplicationStatus | 'all' | 'progress'>('all');
 
-  if (error) {
-    return <ErrorBanner message={error} />;
-  }
+  const items = data?.items ?? [];
+
+  const counts = useMemo(() => {
+    const map = new Map<ApplicationStatus, number>();
+    for (const application of items) {
+      map.set(application.status, (map.get(application.status) ?? 0) + 1);
+    }
+    return map;
+  }, [items]);
+
+  const inProgressCount = IN_PROGRESS.reduce((sum, status) => sum + (counts.get(status) ?? 0), 0);
+
+  const filtered = useMemo(() => {
+    if (filter === 'all') return items;
+    if (filter === 'progress') return items.filter((item) => IN_PROGRESS.includes(item.status));
+    return items.filter((item) => item.status === filter);
+  }, [items, filter]);
+
+  const activeFilters: { key: ApplicationStatus | 'all' | 'progress'; label: string; count: number }[] = [
+    { key: 'all', label: 'All', count: items.length },
+    { key: 'progress', label: 'In progress', count: inProgressCount },
+    ...FILTER_ORDER.filter((status) => (counts.get(status) ?? 0) > 0).map((status) => ({
+      key: status,
+      label: humanise(status),
+      count: counts.get(status) ?? 0,
+    })),
+  ];
 
   return (
     <div className="page">
-      <header className="page-header">
+      <div className="page-header">
         <div>
-          <h1>My applications</h1>
-          <p className="muted">Track and manage your onboarding applications.</p>
+          <p className="eyebrow">Onboarding</p>
+          <h1 className="page-title">My applications</h1>
+          <p className="page-description">
+            Track every application, pick up where you left off and respond to document or information
+            requests.
+          </p>
         </div>
-        <Link className="btn btn-primary" to="/products">
-          New application
-        </Link>
-      </header>
+        <div className="page-actions">
+          <Link className="btn btn-primary" to="/products">
+            <Icon name="plus" size={16} />
+            New application
+          </Link>
+        </div>
+      </div>
 
-      <Card>
-        {loading || !data ? (
-          <SkeletonTable rows={5} />
-        ) : data.items.length === 0 ? (
-          <EmptyState message="You have not started any applications yet." />
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Reference</th>
-                <th>Product</th>
-                <th>Status</th>
-                <th>Submitted</th>
-                <th>Decided</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map((application) => (
-                <tr key={application.id}>
-                  <td>{application.reference}</td>
-                  <td>{application.productName}</td>
-                  <td>
-                    <Badge value={application.status} />
-                  </td>
-                  <td>{formatDate(application.submittedAtUtc)}</td>
-                  <td>{formatDate(application.decidedAtUtc)}</td>
-                  <td className="right">
-                    <Link className="btn btn-ghost" to={`/applications/${application.id}`}>
-                      Open
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+      {!loading && !error && items.length > 0 && (
+        <div className="filter-bar">
+          <div className="chip-row" role="group" aria-label="Filter applications by status">
+            {activeFilters.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={`chip ${filter === option.key ? 'chip--active' : ''}`}
+                aria-pressed={filter === option.key}
+                onClick={() => setFilter(option.key)}
+              >
+                {option.label}
+                <span className="badge badge--neutral">{option.count}</span>
+              </button>
+            ))}
+          </div>
+          <span className="muted text-xs">
+            {pluralise(filtered.length, 'application')} shown
+          </span>
+        </div>
+      )}
+
+      {error ? (
+        <ErrorBanner message={error} onRetry={reload} />
+      ) : loading ? (
+        <Card flush>
+          <SkeletonTable rows={6} />
+        </Card>
+      ) : items.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon="applications"
+            title="You have not started an application yet"
+            message="Choose a product to begin. You can save a draft and return whenever you are ready."
+            action={
+              <Link className="btn btn-primary" to="/products">
+                Browse products
+                <Icon name="arrowRight" size={16} />
+              </Link>
+            }
+          />
+        </Card>
+      ) : filtered.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon="filter"
+            title="No applications match this filter"
+            message="Try a different status filter to see your applications."
+            action={
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setFilter('all')}>
+                Show all applications
+              </button>
+            }
+          />
+        </Card>
+      ) : (
+        <Card
+          title="Application history"
+          subtitle={
+            data && data.totalCount > items.length
+              ? `Showing your most recent ${items.length} of ${data.totalCount} applications.`
+              : 'All applications on your account.'
+          }
+          flush
+        >
+          <div className="app-list">
+            {filtered.map((application) => (
+              <Link
+                key={application.id}
+                to={`/applications/${application.id}`}
+                className="app-row"
+              >
+                <div className="app-row-main">
+                  <span className="app-row-ref">
+                    <Icon name="file" size={13} />
+                    {application.reference}
+                  </span>
+                  <span className="app-row-title">{application.productName}</span>
+                  <span className="app-row-meta">
+                    <span>
+                      <Icon name="calendar" size={13} />
+                      Started {formatDateOnly(application.createdAtUtc)}
+                    </span>
+                    {application.submittedAtUtc && (
+                      <span>
+                        <Icon name="send" size={13} />
+                        Submitted {formatDateOnly(application.submittedAtUtc)}
+                      </span>
+                    )}
+                    {application.decidedAtUtc && (
+                      <span>
+                        <Icon name="checkCircle" size={13} />
+                        Decided {formatDateOnly(application.decidedAtUtc)}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <div className="app-row-side">
+                  <StatusBadge value={application.status} />
+                  <Icon name="chevronRight" size={16} />
+                </div>
+              </Link>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
