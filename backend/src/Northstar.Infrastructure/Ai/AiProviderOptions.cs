@@ -5,8 +5,9 @@ public sealed class AiProviderOptions
     public const string SectionName = "Ai";
 
     /// <summary>
-    /// "deterministic" (default, no external calls), "openai-compatible", or
-    /// "azure-openai". Anything other than "deterministic" requires an API key.
+    /// "deterministic" (default, no external calls), "bedrock",
+    /// "openai-compatible", or "azure-openai". Bedrock uses the AWS default
+    /// credential chain; the other live providers require an API key.
     /// </summary>
     public string Provider { get; set; } = "deterministic";
 
@@ -15,6 +16,16 @@ public sealed class AiProviderOptions
     public string? ApiKey { get; set; }
 
     public string Model { get; set; } = "gpt-4o-mini";
+
+    public string BedrockModelId { get; set; } = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+
+    public string? Region { get; set; }
+
+    public string? GuardrailIdentifier { get; set; }
+
+    public string? GuardrailVersion { get; set; }
+
+    public int MaxTokens { get; set; } = 1200;
 
     public int TimeoutSeconds { get; set; } = 20;
 

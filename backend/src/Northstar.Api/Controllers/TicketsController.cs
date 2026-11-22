@@ -35,6 +35,11 @@ public sealed class TicketsController(
         return Ok(await tickets.ListAsync(query, ct));
     }
 
+    [HttpGet("overview")]
+    [ProducesResponseType(typeof(TicketOverviewResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<TicketOverviewResponse>> Overview(CancellationToken ct)
+        => Ok(await tickets.GetOverviewAsync(ct));
+
     [HttpPost]
     [ProducesResponseType(typeof(TicketDetailResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

@@ -43,7 +43,19 @@ internal sealed class ServiceFixture : IDisposable
 
     public TestUserDirectory Users { get; } = new();
 
+    public TestAiProvider AiProvider { get; } = new();
+
+    public TestKnowledgeRetrieval Knowledge { get; } = new();
+
     public NotificationService Notifications => new(Db, Caller, Clock);
+
+    public AiAssistanceService Ai => new(Db, Caller, Clock, Audit, AiProvider, Knowledge);
+
+    public KnowledgeService KnowledgeBase => new(Db);
+
+    public KnowledgeRetrievalService Retrieval => new(Db);
+
+    public AccountOverviewService Accounts => new(Db, Caller, Clock);
 
     public ApplicationService Applications =>
         new(

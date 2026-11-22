@@ -131,9 +131,51 @@ public static class DtoMapping
         t.ResolvedAtUtc,
         t.CreatedAtUtc,
         t.UpdatedAtUtc,
-        messageCount);
+        messageCount,
+        t.LatestSentiment,
+        t.SentimentAnalyzedAtUtc);
 
-    public static TicketDetailResponse ToDetail(this Ticket t) => new(
+    public static CustomerTicketSummaryResponse ToCustomerSummary(this TicketSummaryResponse s) => new(
+        s.Id,
+        s.Reference,
+        s.Subject,
+        s.Category,
+        s.Priority,
+        s.Status,
+        s.CustomerUserId,
+        s.AssignedAgentId,
+        s.RelatedApplicationId,
+        s.SlaDueAtUtc,
+        s.ResolvedAtUtc,
+        s.CreatedAtUtc,
+        s.UpdatedAtUtc,
+        s.MessageCount);
+
+    public static TicketDetailResponse ToDetail(this Ticket t) => t.ToDetailCore(includeInternalNotes: true);
+
+    /// <summary>Customer-safe detail: internal agent notes and sentiment are never exposed.</summary>
+    public static CustomerTicketDetailResponse ToCustomerDetail(this Ticket t)
+    {
+        var detail = t.ToDetailCore(includeInternalNotes: false);
+        return new CustomerTicketDetailResponse(
+            detail.Id,
+            detail.Reference,
+            detail.Subject,
+            detail.Description,
+            detail.Category,
+            detail.Priority,
+            detail.Status,
+            detail.CustomerUserId,
+            detail.AssignedAgentId,
+            detail.RelatedApplicationId,
+            detail.SlaDueAtUtc,
+            detail.ResolvedAtUtc,
+            detail.CreatedAtUtc,
+            detail.UpdatedAtUtc,
+            detail.Messages);
+    }
+
+    private static TicketDetailResponse ToDetailCore(this Ticket t, bool includeInternalNotes) => new(
         t.Id,
         t.Reference,
         t.Subject,
@@ -148,7 +190,10 @@ public static class DtoMapping
         t.ResolvedAtUtc,
         t.CreatedAtUtc,
         t.UpdatedAtUtc,
+        t.LatestSentiment,
+        t.SentimentAnalyzedAtUtc,
         t.Messages
+            .Where(m => includeInternalNotes || !m.IsInternalNote)
             .OrderBy(m => m.CreatedAtUtc)
             .Select(m => m.ToResponse())
             .ToList());

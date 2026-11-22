@@ -1,17 +1,19 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { RequireAuth, RequireRole } from './auth/Guards';
+import { LandingPage } from './pages/LandingPage';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { ProductsPage } from './pages/ProductsPage';
 import { ApplicationsPage } from './pages/ApplicationsPage';
 import { ApplicationDetailPage } from './pages/ApplicationDetailPage';
+import { CustomerTicketsPage } from './pages/CustomerTicketsPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { NotificationsPage } from './pages/NotificationsPage';
 import { ReviewQueuePage } from './pages/ReviewQueuePage';
 import { ReviewDetailPage } from './pages/ReviewDetailPage';
-import { TicketsPage } from './pages/TicketsPage';
-import { TicketDetailPage } from './pages/TicketDetailPage';
+import { SupportWorkspacePage } from './pages/SupportWorkspacePage';
+import { KnowledgePage } from './pages/KnowledgePage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
 import { AdminProductsPage } from './pages/AdminProductsPage';
 import { AdminAuditPage } from './pages/AdminAuditPage';
@@ -21,6 +23,7 @@ import { NotFoundPage } from './pages/NotFoundPage';
 export function App() {
   return (
     <Routes>
+      <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
 
       <Route
@@ -30,7 +33,6 @@ export function App() {
           </RequireAuth>
         }
       >
-        <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/forbidden" element={<ForbiddenPage />} />
@@ -60,6 +62,14 @@ export function App() {
           }
         />
         <Route
+          path="/my-tickets"
+          element={
+            <RequireRole roles={['Customer']}>
+              <CustomerTicketsPage />
+            </RequireRole>
+          }
+        />
+        <Route
           path="/profile"
           element={
             <RequireRole roles={['Customer']}>
@@ -84,21 +94,31 @@ export function App() {
           }
         />
         <Route
-          path="/tickets"
+          path="/support"
           element={
             <RequireRole roles={['SupportAgent', 'Administrator']}>
-              <TicketsPage />
+              <SupportWorkspacePage />
             </RequireRole>
           }
         />
         <Route
-          path="/tickets/:id"
+          path="/support/:id"
           element={
             <RequireRole roles={['SupportAgent', 'Administrator']}>
-              <TicketDetailPage />
+              <SupportWorkspacePage />
             </RequireRole>
           }
         />
+        <Route
+          path="/knowledge"
+          element={
+            <RequireRole roles={['SupportAgent', 'Administrator']}>
+              <KnowledgePage />
+            </RequireRole>
+          }
+        />
+        <Route path="/tickets" element={<Navigate to="/support" replace />} />
+        <Route path="/tickets/:id" element={<TicketRedirect />} />
         <Route
           path="/admin/users"
           element={
@@ -128,4 +148,9 @@ export function App() {
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
+}
+
+function TicketRedirect() {
+  const { id } = useParams();
+  return <Navigate to={id ? `/support/${id}` : '/support'} replace />;
 }

@@ -23,6 +23,7 @@ public interface IApplicationDbContext
     DbSet<TicketMessage> TicketMessages { get; }
     DbSet<TicketAssignment> TicketAssignments { get; }
     DbSet<AiAssistanceRecord> AiAssistanceRecords { get; }
+    DbSet<KnowledgeArticle> KnowledgeArticles { get; }
     DbSet<AuditEvent> AuditEvents { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
 
@@ -121,4 +122,17 @@ public interface IAiProvider
         CancellationToken ct);
 
     Task<AiCallResult<AiSentiment>> AnalyzeSentimentAsync(AiTicketContext context, CancellationToken ct);
+}
+
+/// <summary>
+/// Retrieves approved demo knowledge articles for a ticket. Deterministic and
+/// database-backed; a vector implementation can replace this adapter later
+/// without changing AI orchestration or the support workspace contracts.
+/// </summary>
+public interface IKnowledgeRetrievalService
+{
+    Task<IReadOnlyList<KnowledgeHit>> RetrieveAsync(
+        KnowledgeRetrievalQuery query,
+        int maxResults = 4,
+        CancellationToken ct = default);
 }

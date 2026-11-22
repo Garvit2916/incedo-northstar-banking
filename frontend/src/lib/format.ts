@@ -32,6 +32,18 @@ export function formatDateOnly(value: string | null | undefined): string {
   });
 }
 
+const INR = new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** Formats demo monetary values using the Indian numbering system. */
+export function formatCurrency(value: number): string {
+  return Number.isFinite(value) ? INR.format(value) : '—';
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;

@@ -36,6 +36,7 @@ public static class DbInitializer
         await SeedUsersAsync(userManager, db, configuration, logger, ct);
         await SeedProductsAsync(db, logger, ct);
         await DeactivateSmokeTestProductsAsync(db, logger, ct);
+        await SeedKnowledgeArticlesAsync(db, logger, ct);
         await SeedTicketsAsync(db, userManager, logger, ct);
         await SeedDemoApplicationAsync(db, userManager, logger, ct);
     }
@@ -135,12 +136,8 @@ public static class DbInitializer
 
     private static async Task SeedProductsAsync(AppDbContext db, ILogger logger, CancellationToken ct)
     {
-        if (await db.Products.AnyAsync(ct))
+        var definitions = new[]
         {
-            return;
-        }
-
-        db.Products.AddRange(
             new Product
             {
                 Code = "SAV-001",
@@ -153,7 +150,22 @@ public static class DbInitializer
                 RequiredDocuments = new List<string> { "ProofOfIdentity", "ProofOfAddress" },
                 Terms = "Demonstration terms only. Not a financial offer.",
                 MinimumAge = 18,
+                IsActive = true,
                 DisplayOrder = 1
+            },
+            new Product
+            {
+                Code = "CC-001",
+                Name = "Everyday Credit Card (Demo)",
+                Summary = "An illustrative credit card with transparent, demo-only terms.",
+                Description = "Demonstration credit card product. No credit decision, interest rate or real limit is represented.",
+                Category = "Cards",
+                Eligibility = "Available to applicants aged 21 or over with a verified address (demonstration rule).",
+                RequiredDocuments = new List<string> { "ProofOfIdentity", "ProofOfAddress", "ProofOfIncome" },
+                Terms = "Demonstration terms only. Not a financial offer.",
+                MinimumAge = 21,
+                IsActive = true,
+                DisplayOrder = 2
             },
             new Product
             {
@@ -166,37 +178,88 @@ public static class DbInitializer
                 RequiredDocuments = new List<string> { "ProofOfIdentity", "ProofOfAddress", "ProofOfIncome" },
                 Terms = "Demonstration terms only. Not a financial offer.",
                 MinimumAge = 18,
-                DisplayOrder = 2
-            },
-            new Product
-            {
-                Code = "PERS-001",
-                Name = "Personal Banking Package (Demo)",
-                Summary = "A bundled personal banking package for the demonstration.",
-                Description = "Illustrative personal banking package. All figures are fictional.",
-                Category = "Personal Banking",
-                Eligibility = "Available to applicants aged 18 or over (demonstration rule).",
-                RequiredDocuments = new List<string> { "ProofOfIdentity", "ProofOfAddress" },
-                Terms = "Demonstration terms only. Not a financial offer.",
-                MinimumAge = 18,
+                IsActive = true,
                 DisplayOrder = 3
             },
             new Product
             {
-                Code = "WM-001",
-                Name = "Wealth Management (Demo)",
-                Summary = "An illustrative wealth-management onboarding product. No real investments or returns.",
-                Description = "Demonstration-only wealth-management onboarding. No investment advice or returns are represented.",
-                Category = "Wealth",
-                Eligibility = "Available to applicants aged 21 or over (demonstration rule).",
+                Code = "PERS-001",
+                Name = "Personal Loan (Demo)",
+                Summary = "An illustrative personal loan application with no real credit decision.",
+                Description = "Demonstration personal loan. Eligibility, rates and limits are fictional.",
+                Category = "Loans",
+                Eligibility = "Available to applicants aged 21 or over with a verified address (demonstration rule).",
                 RequiredDocuments = new List<string> { "ProofOfIdentity", "ProofOfAddress", "ProofOfIncome" },
-                Terms = "Demonstration terms only. Not a financial offer or investment advice.",
+                Terms = "Demonstration terms only. Not a financial offer.",
                 MinimumAge = 21,
+                IsActive = true,
                 DisplayOrder = 4
-            });
+            }
+        };
 
-        await db.SaveChangesAsync(ct);
-        logger.LogInformation("Seeded demonstration product catalogue.");
+        var added = 0;
+        foreach (var definition in definitions)
+        {
+            var existing = await db.Products.FirstOrDefaultAsync(p => p.Code == definition.Code, ct);
+            if (existing is not null)
+            {
+                continue;
+            }
+
+            definition.Id = Guid.NewGuid();
+            definition.CreatedAtUtc = DateTimeOffset.UtcNow;
+            definition.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            db.Products.Add(definition);
+            added++;
+        }
+
+        // Earlier demo builds included a wealth product outside the requested
+        // product set. Keep historical rows for data continuity but hide them.
+        var legacy = await db.Products
+            .Where(p => p.Code == "WM-001" && p.IsActive)
+            .ToListAsync(ct);
+        foreach (var product in legacy)
+        {
+            product.IsActive = false;
+        }
+
+        if (added > 0 || legacy.Count > 0)
+        {
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation("Updated demonstration product catalogue: {Added} added, {Legacy} retired.", added, legacy.Count);
+        }
+    }
+
+    private static async Task SeedKnowledgeArticlesAsync(
+        AppDbContext db,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var existingCodes = await db.KnowledgeArticles
+            .Select(a => a.ArticleCode)
+            .ToListAsync(ct);
+        var known = new HashSet<string>(existingCodes, StringComparer.OrdinalIgnoreCase);
+
+        var added = 0;
+        var now = DateTimeOffset.UtcNow;
+        foreach (var article in KnowledgeSeedData.Articles)
+        {
+            if (!known.Add(article.ArticleCode))
+            {
+                continue;
+            }
+
+            article.CreatedAtUtc = now;
+            article.UpdatedAtUtc = now;
+            db.KnowledgeArticles.Add(article);
+            added++;
+        }
+
+        if (added > 0)
+        {
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation("Seeded {Count} demonstration knowledge articles.", added);
+        }
     }
 
     /// <summary>
@@ -232,11 +295,6 @@ public static class DbInitializer
         ILogger logger,
         CancellationToken ct)
     {
-        if (await db.Tickets.AnyAsync(ct))
-        {
-            return;
-        }
-
         var customer = await userManager.FindByEmailAsync("customer@northstar.example");
         var agent = await userManager.FindByEmailAsync("agent@northstar.example");
         var now = DateTimeOffset.UtcNow;
@@ -275,7 +333,8 @@ public static class DbInitializer
             return ticket;
         }
 
-        db.Tickets.AddRange(
+        var candidates = new[]
+        {
             Make("NS-TKT-1001", "Cannot sign in to my account",
                 "I have been locked out of my account since this morning and cannot reset my password.",
                 TicketCategory.AccountAccess, TicketPriority.High, TicketStatus.Open,
@@ -301,10 +360,48 @@ public static class DbInitializer
                 "I cannot find where to see my application reference number.",
                 TicketCategory.StatusEnquiry, TicketPriority.Low, TicketStatus.Resolved,
                 (MessageAuthorType.Customer, "Where do I find my reference number?"),
-                (MessageAuthorType.Agent, "Shared the tracking article and stepped the customer through it.")));
+                (MessageAuthorType.Agent, "Shared the tracking article and stepped the customer through it.")),
 
+            Make("NS-TKT-1006", "Card charge I do not recognise",
+                "There is a card charge of 2,499 from an unknown merchant that I did not make.",
+                TicketCategory.CardTransactionDispute, TicketPriority.High, TicketStatus.Open,
+                (MessageAuthorType.Customer, "I see a wrong charge of 2,499 on my credit card. I did not make this transaction.")),
+
+            Make("NS-TKT-1007", "UPI payment failed but money was deducted",
+                "My UPI payment failed but the money was taken from my account.",
+                TicketCategory.FailedUpiTransaction, TicketPriority.High, TicketStatus.New,
+                (MessageAuthorType.Customer, "The UPI payment failed, money was deducted and I have no refund yet.")),
+
+            Make("NS-TKT-1008", "Lost card - please block it",
+                "I have lost my credit card and want it blocked safely.",
+                TicketCategory.CardBlockingReplacement, TicketPriority.Urgent, TicketStatus.New,
+                (MessageAuthorType.Customer, "I lost my card today. Please block it and tell me how to get a replacement.")),
+
+            Make("NS-TKT-1009", "KYC document was rejected",
+                "My proof of address was rejected and I do not know how to re-upload it.",
+                TicketCategory.KycVerification, TicketPriority.Normal, TicketStatus.New,
+                (MessageAuthorType.Customer, "My KYC document is rejected. Where do I upload a new one?")),
+
+            Make("NS-TKT-1010", "Question about my credit card bill",
+                "I would like to understand the minimum due and due date on my card statement.",
+                TicketCategory.CreditCardBilling, TicketPriority.Low, TicketStatus.PendingCustomer,
+                (MessageAuthorType.Customer, "Can you explain the minimum due on my credit card statement?"))
+        };
+
+        var existing = await db.Tickets
+            .Select(t => t.Reference)
+            .ToListAsync(ct);
+        var known = new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
+        var missing = candidates.Where(t => known.Add(t.Reference)).ToList();
+
+        if (missing.Count == 0)
+        {
+            return;
+        }
+
+        db.Tickets.AddRange(missing);
         await db.SaveChangesAsync(ct);
-        logger.LogInformation("Seeded demonstration support tickets.");
+        logger.LogInformation("Seeded {Count} demonstration support ticket(s).", missing.Count);
     }
 
     private static async Task SeedDemoApplicationAsync(

@@ -3,11 +3,13 @@
 A secure retail-banking **customer onboarding** platform with an **AI-assisted
 customer-support workspace**, built as an independent engineering assessment.
 
-Customers browse a (fictitious) product catalogue, complete an application,
-upload KYC documents, submit it, and track its progress through a review
-workflow. Support agents work a ticket queue with AI assistance (summaries,
-suggested replies, sentiment, next-best actions). Administrators manage users,
-products and the audit trail.
+A public landing page introduces a focused catalogue of savings, credit-card,
+personal-loan and fixed-deposit products. Customers complete an application,
+upload KYC documents, submit it, track its progress through a review workflow,
+see a masked illustrative account overview and raise/track their own support
+tickets. Support agents work a three-pane ticket queue with AI assistance grounded in an approved knowledge base
+(summaries, suggested replies, sentiment, classified issues and evidenced
+next-best actions). Administrators manage users, products and the audit trail.
 
 > **Disclaimer.** This is an independent assessment project. All products,
 > customers, tickets, rates and terms are **fictitious**. It is not an official
@@ -30,6 +32,8 @@ products and the audit trail.
 - [Configuration](#configuration)
 - [Security](#security)
 - [AI assistance](#ai-assistance)
+- [Demo walkthrough](docs/DEMO_GUIDE.md)
+- [Solution approach](docs/SOLUTION_APPROACH.md)
 - [Project layout](#project-layout)
 - [Docker (optional)](#docker-optional)
 - [Scope & limitations](#scope--limitations)
@@ -63,8 +67,12 @@ Controller ──► Application service ──► Domain entity ──► IAppl
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the full breakdown,
-[`docs/api.md`](docs/api.md) for the endpoint reference and
-[`docs/testing.md`](docs/testing.md) for what each test suite covers.
+[`docs/api.md`](docs/api.md) for the endpoint reference,
+[`docs/testing.md`](docs/testing.md) for what each test suite covers,
+[`docs/project-report.md`](docs/project-report.md) for the full project report
+(business problem, methodology, approach, requirements and deliverables) and
+[`docs/aws-production-roadmap.md`](docs/aws-production-roadmap.md) for the AWS
+production-readiness roadmap.
 
 ## Technology
 
@@ -73,6 +81,7 @@ See [`docs/architecture.md`](docs/architecture.md) for the full breakdown,
 - **React 18 + TypeScript + Vite** — single-page web client.
 - **CSS custom-property design system** — shared tokens, components, layout and page styles with no UI framework dependency.
 - **JWT** bearer auth with rotating refresh tokens.
+- **AWS Bedrock** (Converse API) via the AWS SDK, with an OpenAI-compatible adapter and a deterministic local fallback.
 - **xUnit** — unit and integration tests (`WebApplicationFactory`).
 - **Vitest** — frontend unit tests for the client-side policy mirrors.
 - **Swashbuckle** — OpenAPI/Swagger UI (development only).
@@ -149,9 +158,11 @@ truth for authorization and workflow rules.
 
 | Area | Highlights |
 | --- | --- |
-| Sign-in | Split marketing/auth layout, registration and password reset, development-only demo account picker. |
-| Customer | Role-aware dashboard, product catalogue with details, guided application wizard, profile completion, document upload, notifications and status tracking. |
-| Operations | Review queue and decision workspace, ticket queue and conversation view, internal notes, assignment, status changes and AI assistance with provenance labels. |
+| Public | Original Northstar landing page with product overview, journey steps, trust messaging and a clear sign-in CTA. `/login` and `/` are public; all other routes are role-gated. |
+| Sign-in | Split marketing/auth layout, registration and a development-only demo account picker. Password reset is not part of this prototype. |
+| Customer | Role-aware dashboard with a masked demo account overview (balance, sample transactions and active products), product catalogue with details, guided application wizard, profile completion, document upload, notifications, status tracking and a `/my-tickets` page for raising tickets and following public support replies. |
+| Operations | Three-panel AI support workspace (filterable inbox, conversation and composer, AI copilot) with assistive classification, cited knowledge articles, match reasons, workflows and confidence. Review queue and decision workspace, internal notes, assignment and status changes remain human-controlled. |
+| Knowledge | Read-only agent knowledge workspace with search, category filters, article detail, resolution steps, customer explanations, agent guidance and escalation criteria. |
 | Administration | User role management, product catalogue administration and a filterable audit trail. |
 | Shared UX | Dark navigation rail, breadcrumb header, toasts, dialogs, skeleton loading, empty states, tables, pagination and accessible form validation. |
 
@@ -174,9 +185,11 @@ Development seeding is idempotent. All accounts use the password
 | Support agent | `agent@northstar.example` |
 | Customer | `customer@northstar.example` |
 
-Seed data also includes **4 products** (`SAV-001`, `FD-001`, `PERS-001`,
-`WM-001`), **5 tickets** (`NS-TKT-1001`…`1005`) and one submitted demo
-application (`NS-APP-DEMO01`) for the customer.
+Seed data also includes **4 active products** (`SAV-001`, `CC-001`, `FD-001`,
+`PERS-001`; legacy `WM-001` is deactivated), **10 tickets**
+(`NS-TKT-1001`…`NS-TKT-1010`), **26 knowledge articles** (`KB-001`…`KB-026`) and
+one submitted demo application (`NS-APP-DEMO01`) for the customer. The customer
+account overview is deterministic demo data with masked account number and IFSC.
 
 ## Testing & verification
 
@@ -193,16 +206,16 @@ dotnet build Northstar.slnx -v q --nologo
 # 2. Run all automated tests (Domain + Application + API integration)
 dotnet test Northstar.slnx
 
-# 3. Frontend unit tests (Vitest)
-cd frontend; npm install; npm run test
+# 3. Frontend checks (Vitest + strict TypeScript/Vite build)
+cd frontend; npm install; npm run test; npm run build
 ```
 
 | Suite | Type | What it proves |
 | --- | --- | --- |
 | `Northstar.Domain.Tests` | pure unit | State-machine transitions, entity behaviour and invariants. |
-| `Northstar.Application.Tests` | service tests (real EF Core, in-memory SQLite) | Onboarding/review/document/ticket/notification use cases, including append-only child handling, ticket reassignment and the registration password policy. |
-| `Northstar.Api.IntegrationTests` | HTTP integration (`WebApplicationFactory`) | Auth, health/security headers, the authorization matrix, the full application lifecycle and ticket endpoints over real HTTP. |
-| `frontend` (Vitest) | frontend unit | The registration password-policy mirror, confirmation rules and the document upload policy mirror. |
+| `Northstar.Application.Tests` | service tests (real EF Core, in-memory SQLite) | Onboarding/review/document/ticket/notification use cases, including append-only child handling, ticket reassignment, customer ticket ownership/isolation, internal-note filtering, the registration password policy, AI sentiment persistence, next-best-action shape and summary provenance. |
+| `Northstar.Api.IntegrationTests` | HTTP integration (`WebApplicationFactory`) | Auth, health/security headers, the authorization matrix, the full application lifecycle, operations ticket endpoints, scoped customer ticket endpoints, the operations overview and persisted sentiment over real HTTP. |
+| `frontend` (Vitest) | frontend unit | Registration password policy, document upload policy, safe AI draft wording, confidence formatting and the knowledge/account/customer-ticket endpoint wiring. |
 
 ### Live smoke suite
 
@@ -212,10 +225,13 @@ With the API running on <http://localhost:5199>:
 powershell -ExecutionPolicy Bypass -File scripts/smoke.ps1
 ```
 
-This drives 73 end-to-end HTTP checks (health, security headers, token rotation,
+This drives 97 end-to-end HTTP checks (health, security headers, token rotation,
 the full onboarding lifecycle, document upload/validation, notifications,
-tickets + AI, admin and the role-authorization matrix) and exits non-zero on any
-failure. See [`docs/testing.md`](docs/testing.md) for the full list.
+customer ticket creation/tracking and privacy, operations tickets + AI, masked
+account data, knowledge search/detail, grounded citations, assistive
+classification, admin and the role-authorization matrix) and exits non-zero on
+any failure. See
+[`docs/testing.md`](docs/testing.md) for the full list.
 
 ## Configuration
 
@@ -230,7 +246,9 @@ Settings live in `backend/src/Northstar.Api/appsettings.json` (overridden by
 | `Storage` | `Provider` | `Local` \| `Azure` | `Local` |
 | `Storage` | `LocalRootPath` | path | `App_Data/kyc` |
 | `Email` | `Provider` | `Noop` \| `Smtp` \| `AzureCommunication` | `Noop` |
-| `Ai` | `Provider` | `deterministic` \| (an OpenAI-compatible provider) | `deterministic` |
+| `Ai` | `Provider` | `deterministic` \| `bedrock` \| `openai-compatible` \| `azure-openai` | `deterministic` |
+| `Ai` | `BedrockModelId`, `Region`, `GuardrailIdentifier`, `GuardrailVersion` | Bedrock model/inference region/optional guardrail | Claude 3.5 Sonnet v2; region from the AWS credential chain |
+| `Ai` | `BaseUrl`, `ApiKey`, `Model` | OpenAI-compatible endpoint and model | unset; `gpt-4o-mini` |
 | `FileUpload` | `MaxFileSizeBytes`, `AllowedExtensions`, `AllowedContentTypes` | — | 5 MB; `.pdf/.jpg/.jpeg/.png` |
 | `Cors` | `Origins` | allowed SPA origins | `http://localhost:5173` |
 | `RateLimiting` | `Auth` / `Ai` / `Uploads` | `PermitLimit`, `WindowSeconds` | see file |
@@ -238,7 +256,7 @@ Settings live in `backend/src/Northstar.Api/appsettings.json` (overridden by
 
 Each external concern sits behind a port, so switching provider is a
 configuration change, not a code change (Azure Blob, SMTP/Azure Communication
-email, OpenAI-compatible AI).
+email, Bedrock/OpenAI-compatible AI).
 
 ## Security
 
@@ -272,12 +290,36 @@ Agents get four AI helpers on any ticket:
 | Next best actions | `POST /api/tickets/{id}/ai/next-best-actions` |
 
 By default (`Ai:Provider=deterministic`) these run against a local deterministic
-provider so the app is fully functional offline and in CI. When an
-OpenAI-compatible provider is configured (`BaseUrl` + `ApiKey`), requests go to
-the live model wrapped in a **resilient provider that falls back to the
-deterministic implementation on any error**. Every response carries
+provider so the app is fully functional offline and in CI. Set
+`Ai:Provider=bedrock` to use **Amazon Bedrock** through the Converse API. The
+Bedrock adapter uses the **AWS default credential chain** (environment variables,
+shared profile, or the workload/instance role) - no AWS keys are stored in the
+repository. Configure `Ai:Region`, `Ai:BedrockModelId`, and optionally
+`Ai:GuardrailIdentifier` / `Ai:GuardrailVersion` for guardrail enforcement; the
+identity needs `bedrock:InvokeModel` and, when configured, guardrail permissions.
+When an OpenAI-compatible provider is configured (`BaseUrl` + `ApiKey`), requests
+go to the live model instead. Both live providers are wrapped in a **resilient
+provider that falls back to the deterministic implementation on any error**
+(timeout, transport failure, or schema mismatch). Every response carries
 `provenance` (`isLiveInference`, `requiresHumanReview`, `disclaimer`) and the UI
-labels output as live or fallback. AI output is assistive only and must be
+labels output as live or fallback.
+
+The workspace also surfaces **persisted sentiment** on the ticket (list, detail
+and operations overview), with confidence and frustration/urgency indicators.
+Next-best actions are deterministic, explainable rules that include a title,
+explanation, priority, evidence, expected outcome, typed action, optional
+confidence, a human-confirmation-only demo workflow and citations to approved
+knowledge articles. The assistive issue classifier reads the subject,
+description and conversation as **untrusted data**, shows matched signals and
+never overwrites the persisted ticket category.
+
+Every summary and suggested reply also cites the knowledge articles used to
+assemble its guidance. Article text is data, not instructions. Draft replies for
+sensitive categories use safe language (secure upload links, approved identity
+verification, no OTP/PIN/password requests) and stay editable. Status-changing
+actions are proposed only and require explicit confirmation in the UI; there is
+no endpoint that executes a privileged action from AI output. AI output is
+advisory only, labelled as live inference or deterministic fallback, and must be
 reviewed by a human.
 
 ## Project layout
@@ -310,9 +352,9 @@ reviewed by a human.
 
 ## Docker (optional)
 
-A `docker-compose.yml` is provided to run the API and web app together locally
-(verified end-to-end: images build, both containers come up healthy, and the
-full `scripts/smoke.ps1` suite passes 73/73 against the containerised API).
+A `docker-compose.yml` is provided to run the API and web app together locally.
+The current `scripts/smoke.ps1` result below was verified against a locally
+started API; the container stack was **not re-verified** for this change.
 
 ```powershell
 docker compose up --build

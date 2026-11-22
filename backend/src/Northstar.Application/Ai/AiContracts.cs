@@ -14,7 +14,8 @@ public sealed record AiTicketContext(
     string Priority,
     string Status,
     IReadOnlyList<AiConversationMessage> Conversation,
-    AiApplicationContext? Application);
+    AiApplicationContext? Application,
+    string Description = "");
 
 public sealed record AiConversationMessage(string Author, string Body);
 
@@ -61,7 +62,45 @@ public sealed record AiSentiment(
     string Explanation,
     double? Confidence,
     bool EscalationRecommended,
-    IReadOnlyList<string> Signals);
+    IReadOnlyList<string> Signals,
+    IReadOnlyList<string> FrustrationIndicators,
+    IReadOnlyList<string> UrgencyIndicators);
+
+/// <summary>Minimised, non-sensitive query built from a support ticket.</summary>
+public sealed record KnowledgeRetrievalQuery(
+    string TicketCategory,
+    string Subject,
+    string Description,
+    IReadOnlyList<string> ConversationBody,
+    string? ApplicableProduct);
+
+/// <summary>A scored knowledge article retrieved for a ticket.</summary>
+public sealed record KnowledgeHit(
+    Guid ArticleId,
+    string ArticleCode,
+    string Title,
+    string Category,
+    string ApplicableProduct,
+    string IssueType,
+    string Priority,
+    IReadOnlyList<string> ResolutionSteps,
+    string CustomerExplanation,
+    string AgentGuidance,
+    string EscalationCriteria,
+    double Score,
+    string MatchReason);
+
+public static class NextBestActionTypes
+{
+    public const string Reply = "reply";
+    public const string RequestDocuments = "request-documents";
+    public const string VerifyIdentity = "verify-identity";
+    public const string ReviewApplication = "review-application";
+    public const string Escalate = "escalate";
+    public const string Resolve = "resolve";
+    public const string FollowUp = "follow-up";
+    public const string Clarify = "clarify";
+}
 
 /// <summary>
 /// Deterministic next-best action. Every recommendation carries the rule that
@@ -72,4 +111,22 @@ public sealed record NextBestAction(
     string Reason,
     string Evidence,
     string Priority,
-    bool RequiresHumanApproval);
+    bool RequiresHumanApproval,
+    string ExpectedOutcome,
+    string ActionType)
+{
+    /// <summary>A short label suitable for the support workspace action card.</summary>
+    public string Title { get; init; } = Action;
+
+    /// <summary>Agent-facing explanation, distinct from the evidence string.</summary>
+    public string Explanation { get; init; } = Reason;
+
+    /// <summary>Approved knowledge articles supporting this recommendation.</summary>
+    public IReadOnlyList<KnowledgeHit> Sources { get; init; } = Array.Empty<KnowledgeHit>();
+
+    /// <summary>Safe, human-confirmation-only demo workflow suggested by the action.</summary>
+    public string? SuggestedWorkflow { get; init; }
+
+    /// <summary>Retrieval confidence, never an automated decision score.</summary>
+    public double? Confidence { get; init; }
+}

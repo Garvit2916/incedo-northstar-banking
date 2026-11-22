@@ -86,6 +86,7 @@ Uploads are validated for extension (allow-list: `.pdf`, `.jpg`, `.jpeg`,
 | Method | Path | Roles | Notes |
 | --- | --- | --- | --- |
 | GET | `/` | SupportAgent, Administrator | Query `status`, `category`, `priority`, `assignedAgentId`, `search`, paging. |
+| GET | `/overview` | SupportAgent, Administrator | Operations overview counts (open, unassigned, urgent, escalated, awaiting customer, resolved today, assigned to me, negative/analysed sentiment). |
 | POST | `/` | SupportAgent, Administrator | Create a ticket (seeds an initial agent message). |
 | GET | `/{id}` | SupportAgent, Administrator | Detail incl. `messages`. |
 | POST | `/{id}/messages` | SupportAgent, Administrator | Append message. Body `{ body, isInternalNote }`. |
@@ -98,6 +99,30 @@ Uploads are validated for extension (allow-list: `.pdf`, `.jpg`, `.jpeg`,
 
 Every AI response includes `provenance`:
 `{ provider, model, isLiveInference, requiresHumanReview, disclaimer }`.
+`summarize`, `suggest-response` and `next-best-actions` also return `sources`:
+`{ id, articleCode, title, category, score, matchReason }` from the approved
+knowledge base. Next-best actions add `title`, `explanation`, `sources`,
+`suggestedWorkflow`, `confidence` and `requiresHumanApproval: true`, plus an
+assistive `classification` on the response
+(`suggestedCategory`, `issueType`, `confidence`, `signals`, `explanation`).
+Classification never changes the recorded ticket category, and there is no
+AI endpoint that performs a status change or privileged action. Related
+application references, statuses and document review states are injected into AI
+context only for `Reviewer`/`Administrator` callers; support agents receive
+ticket-only context.
+
+## Customer self-service tickets — `/api/customer/tickets`
+
+| Method | Path | Roles | Notes |
+| --- | --- | --- | --- |
+| POST | `/` | Customer | Create a ticket. Body `{ subject, description, category, priority, relatedApplicationId? }`; `CustomerUserId` is never accepted. An optional related application must belong to the caller (`404` otherwise). |
+| GET | `/` | Customer | List only the caller's tickets, newest first; query `page`, `pageSize`. Message counts exclude internal notes. |
+| GET | `/{id}` | Customer | Detail for a ticket owned by the caller (`404` otherwise). Agent internal notes are filtered out. |
+
+Responses use customer-specific DTOs that omit `latestSentiment` and
+`sentimentAnalyzedAtUtc`, which are internal triage signals. The opening message
+is authored by `Customer` and is public. Operations roles receive `403` on all
+three routes and continue to use `/api/tickets`.
 
 ## Notifications — `/api/notifications`
 
@@ -113,7 +138,25 @@ Every AI response includes `provenance`:
 | Method | Path | Roles | Notes |
 | --- | --- | --- | --- |
 | GET | `/customer` | Customer | Customer stats. |
+| GET | `/account-overview` | Customer | Deterministic demo account view with masked account number/IFSC, balance, sample transactions and active products. |
 | GET | `/operations` | SupportAgent, Reviewer, Administrator | Operations stats. |
+
+## Knowledge — `/api/knowledge`
+
+Read-only catalogue of approved demonstration articles used to ground Copilot
+output. Customers receive `403`.
+
+| Method | Path | Roles | Notes |
+| --- | --- | --- | --- |
+| GET | `/` | SupportAgent, Administrator | Query `search`, `category`, `product`, `page`, `pageSize`; returns paged articles. |
+| GET | `/categories` | SupportAgent, Administrator | Distinct category names. |
+| GET | `/{id}` | SupportAgent, Administrator | Full article incl. resolution steps, customer explanation, agent guidance and escalation criteria. |
+
+`KnowledgeArticle`: `{ id, articleCode, title, category, tags, keywords,
+content, applicableProduct, issueType, priority, resolutionSteps,
+customerExplanation, agentGuidance, escalationCriteria, isActive,
+createdAtUtc, updatedAtUtc }`. There are no create/update routes in the
+prototype.
 
 ## Admin — `/api/admin`
 

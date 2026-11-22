@@ -10,8 +10,8 @@ using Northstar.Domain.Entities;
 namespace Northstar.Application.Services;
 
 /// <summary>
-/// Support ticket management for agents and administrators: creation,
-/// assignment, conversation history, and status handling.
+/// Support ticket management: agent/admin assignment, conversation and status
+/// handling, plus scoped customer self-service creation and tracking.
 /// </summary>
 public sealed class TicketService
 {
@@ -47,7 +47,47 @@ public sealed class TicketService
         _assignValidator = assignValidator;
     }
 
-    public async Task<TicketSummaryResponse> CreateAsync(CreateTicketRequest request, CancellationToken ct)
+    /// <summary>Agent/admin creation. The customer may be supplied explicitly.</summary>
+    public Task<TicketSummaryResponse> CreateAsync(CreateTicketRequest request, CancellationToken ct) =>
+        CreateCoreAsync(request, MessageAuthorType.Agent, ct);
+
+    /// <summary>
+    /// Customer self-service creation. Ownership always comes from the current
+    /// principal, and a related application must belong to that customer.
+    /// </summary>
+    public async Task<CustomerTicketSummaryResponse> CreateForCustomerAsync(
+        CreateCustomerTicketRequest request,
+        CancellationToken ct)
+    {
+        var customerUserId = RequireUserId();
+        if (request.RelatedApplicationId is { } applicationId &&
+            !await _db.Applications.AnyAsync(
+                a => a.Id == applicationId && a.CustomerProfile!.UserId == customerUserId, ct))
+        {
+            // Do not reveal whether another customer's application exists.
+            throw new NotFoundException("Related application was not found.");
+        }
+
+        // CreateCoreAsync validates the mapped request, so the customer request
+        // is not validated twice.
+        var created = await CreateCoreAsync(
+            new CreateTicketRequest(
+                request.Subject,
+                request.Description,
+                request.Category,
+                request.Priority,
+                customerUserId,
+                request.RelatedApplicationId),
+            MessageAuthorType.Customer,
+            ct);
+
+        return created.ToCustomerSummary();
+    }
+
+    private async Task<TicketSummaryResponse> CreateCoreAsync(
+        CreateTicketRequest request,
+        MessageAuthorType authorType,
+        CancellationToken ct)
     {
         await _createValidator.ValidateAndThrowAsync(request, ct);
 
@@ -75,7 +115,7 @@ public sealed class TicketService
         ticket.Messages.Add(new TicketMessage
         {
             TicketId = ticket.Id,
-            AuthorType = MessageAuthorType.Agent,
+            AuthorType = authorType,
             AuthorUserId = _currentUser.UserId,
             Body = request.Description.Trim(),
             IsInternalNote = false,
@@ -86,8 +126,33 @@ public sealed class TicketService
         _db.Tickets.Add(ticket);
         await _db.SaveChangesAsync(ct);
 
-        await _audit.RecordAsync("ticket.created", "Ticket", ticket.Id.ToString(), new { ticket.Reference });
+        await _audit.RecordAsync(
+            "ticket.created",
+            "Ticket",
+            ticket.Id.ToString(),
+            new { ticket.Reference, submittedBy = authorType.ToString() });
         return ticket.ToSummary(ticket.Messages.Count);
+    }
+
+    /// <summary>
+    /// Lists only the caller's tickets, counting public messages only and hiding
+    /// internal sentiment analytics.
+    /// </summary>
+    public async Task<PagedResult<CustomerTicketSummaryResponse>> ListMineAsync(PageQuery page, CancellationToken ct)
+    {
+        var userId = RequireUserId();
+        var tickets = _db.Tickets.AsNoTracking().Where(t => t.CustomerUserId == userId);
+
+        var total = await tickets.CountAsync(ct);
+        var paged = tickets
+            .OrderByDescending(t => t.UpdatedAtUtc)
+            .Skip((page.NormalisedPage - 1) * page.NormalisedPageSize)
+            .Take(page.NormalisedPageSize);
+
+        var items = await ProjectCustomerSummaries(paged).ToListAsync(ct);
+
+        return new PagedResult<CustomerTicketSummaryResponse>(
+            items, page.NormalisedPage, page.NormalisedPageSize, total);
     }
 
     public async Task<PagedResult<TicketSummaryResponse>> ListAsync(TicketQuery query, CancellationToken ct)
@@ -123,28 +188,59 @@ public sealed class TicketService
         var page = new PageQuery(query.Page, query.PageSize);
         var total = await tickets.CountAsync(ct);
 
-        var items = await tickets
+        var paged = tickets
             .OrderByDescending(t => t.UpdatedAtUtc)
             .Skip((page.NormalisedPage - 1) * page.NormalisedPageSize)
-            .Take(page.NormalisedPageSize)
-            .Select(t => new TicketSummaryResponse(
-                t.Id,
-                t.Reference,
-                t.Subject,
-                t.Category,
-                t.Priority,
-                t.Status,
-                t.CustomerUserId,
-                t.AssignedAgentId,
-                t.RelatedApplicationId,
-                t.SlaDueAtUtc,
-                t.ResolvedAtUtc,
-                t.CreatedAtUtc,
-                t.UpdatedAtUtc,
-                t.Messages.Count))
-            .ToListAsync(ct);
+            .Take(page.NormalisedPageSize);
+
+        var items = await ProjectSummaries(paged, publicMessagesOnly: false).ToListAsync(ct);
 
         return new PagedResult<TicketSummaryResponse>(items, page.NormalisedPage, page.NormalisedPageSize, total);
+    }
+
+    public async Task<TicketOverviewResponse> GetOverviewAsync(CancellationToken ct)
+    {
+        var userId = RequireUserId();
+        var startOfDay = new DateTimeOffset(_clock.UtcNow.UtcDateTime.Date, TimeSpan.Zero);
+
+        // One grouped query keeps the overview to a single database round trip.
+        var counts = await _db.Tickets
+            .AsNoTracking()
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Open = g.Count(t => t.Status != TicketStatus.Resolved && t.Status != TicketStatus.Closed),
+                Unassigned = g.Count(t => t.Status != TicketStatus.Resolved &&
+                                          t.Status != TicketStatus.Closed &&
+                                          t.AssignedAgentId == null),
+                Urgent = g.Count(t => t.Status != TicketStatus.Resolved &&
+                                      t.Status != TicketStatus.Closed &&
+                                      t.Priority == TicketPriority.Urgent),
+                Escalated = g.Count(t => t.Status == TicketStatus.Escalated),
+                AwaitingCustomer = g.Count(t => t.Status == TicketStatus.PendingCustomer),
+                ResolvedToday = g.Count(t => t.ResolvedAtUtc >= startOfDay),
+                AssignedToMe = g.Count(t => t.Status != TicketStatus.Resolved &&
+                                            t.Status != TicketStatus.Closed &&
+                                            t.AssignedAgentId == userId),
+                NegativeSentiment = g.Count(t => t.LatestSentiment == SentimentLabel.Negative),
+                UrgentEscalationSentiment = g.Count(t => t.LatestSentiment == SentimentLabel.UrgentEscalation),
+                AnalyzedSentiment = g.Count(t => t.LatestSentiment != null)
+            })
+            .FirstOrDefaultAsync(ct);
+
+        return counts is null
+            ? new TicketOverviewResponse(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            : new TicketOverviewResponse(
+                counts.Open,
+                counts.Unassigned,
+                counts.Urgent,
+                counts.Escalated,
+                counts.AwaitingCustomer,
+                counts.ResolvedToday,
+                counts.AssignedToMe,
+                counts.NegativeSentiment,
+                counts.UrgentEscalationSentiment,
+                counts.AnalyzedSentiment);
     }
 
     public async Task<TicketDetailResponse> GetAsync(Guid id, CancellationToken ct)
@@ -156,6 +252,22 @@ public sealed class TicketService
             ?? throw new NotFoundException("Ticket was not found.");
 
         return ticket.ToDetail();
+    }
+
+    /// <summary>
+    /// Customer detail view. Internal notes are filtered by the mapping layer and
+    /// other customers' tickets are indistinguishable from missing ones.
+    /// </summary>
+    public async Task<CustomerTicketDetailResponse> GetMineAsync(Guid id, CancellationToken ct)
+    {
+        var userId = RequireUserId();
+        var ticket = await _db.Tickets
+            .AsNoTracking()
+            .Include(t => t.Messages)
+            .FirstOrDefaultAsync(t => t.Id == id && t.CustomerUserId == userId, ct)
+            ?? throw new NotFoundException("Ticket was not found.");
+
+        return ticket.ToCustomerDetail();
     }
 
     public async Task<TicketDetailResponse> AddMessageAsync(
@@ -223,6 +335,45 @@ public sealed class TicketService
 
         return await GetAsync(ticket.Id, ct);
     }
+
+    private static IQueryable<TicketSummaryResponse> ProjectSummaries(
+        IQueryable<Ticket> tickets,
+        bool publicMessagesOnly) =>
+        tickets.Select(t => new TicketSummaryResponse(
+            t.Id,
+            t.Reference,
+            t.Subject,
+            t.Category,
+            t.Priority,
+            t.Status,
+            t.CustomerUserId,
+            t.AssignedAgentId,
+            t.RelatedApplicationId,
+            t.SlaDueAtUtc,
+            t.ResolvedAtUtc,
+            t.CreatedAtUtc,
+            t.UpdatedAtUtc,
+            publicMessagesOnly ? t.Messages.Count(m => !m.IsInternalNote) : t.Messages.Count,
+            t.LatestSentiment,
+            t.SentimentAnalyzedAtUtc));
+
+    private static IQueryable<CustomerTicketSummaryResponse> ProjectCustomerSummaries(
+        IQueryable<Ticket> tickets) =>
+        tickets.Select(t => new CustomerTicketSummaryResponse(
+            t.Id,
+            t.Reference,
+            t.Subject,
+            t.Category,
+            t.Priority,
+            t.Status,
+            t.CustomerUserId,
+            t.AssignedAgentId,
+            t.RelatedApplicationId,
+            t.SlaDueAtUtc,
+            t.ResolvedAtUtc,
+            t.CreatedAtUtc,
+            t.UpdatedAtUtc,
+            t.Messages.Count(m => !m.IsInternalNote)));
 
     private async Task<Ticket> RequireTicketAsync(Guid id, CancellationToken ct) =>
         await _db.Tickets

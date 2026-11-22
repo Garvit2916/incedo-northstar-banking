@@ -31,6 +31,10 @@ public class Ticket : AuditableEntity
 
     public DateTimeOffset? ResolvedAtUtc { get; private set; }
 
+    public SentimentLabel? LatestSentiment { get; private set; }
+
+    public DateTimeOffset? SentimentAnalyzedAtUtc { get; private set; }
+
     public ICollection<TicketMessage> Messages { get; set; } = new List<TicketMessage>();
 
     public ICollection<TicketAssignment> Assignments { get; set; } = new List<TicketAssignment>();
@@ -44,6 +48,12 @@ public class Ticket : AuditableEntity
 
         Status = to;
         ResolvedAtUtc = to is TicketStatus.Resolved or TicketStatus.Closed ? now : null;
+    }
+
+    public void RecordSentiment(SentimentLabel label, DateTimeOffset now)
+    {
+        LatestSentiment = label;
+        SentimentAnalyzedAtUtc = now;
     }
 
     public void AssignTo(Guid agentUserId, Guid assignedByUserId, DateTimeOffset now)

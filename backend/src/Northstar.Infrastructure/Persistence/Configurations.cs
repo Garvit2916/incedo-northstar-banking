@@ -214,6 +214,28 @@ public sealed class AiAssistanceRecordConfiguration : IEntityTypeConfiguration<A
     }
 }
 
+public sealed class KnowledgeArticleConfiguration : IEntityTypeConfiguration<KnowledgeArticle>
+{
+    public void Configure(EntityTypeBuilder<KnowledgeArticle> b)
+    {
+        b.ConfigureAuditable();
+        b.Property(x => x.ArticleCode).HasMaxLength(60).IsRequired();
+        b.Property(x => x.Title).HasMaxLength(200).IsRequired();
+        b.Property(x => x.Category).HasMaxLength(80).IsRequired();
+        b.Property(x => x.TagsCsv).HasMaxLength(600);
+        b.Property(x => x.Content).HasMaxLength(8000).IsRequired();
+        b.Property(x => x.ApplicableProduct).HasMaxLength(80);
+        b.Property(x => x.IssueType).HasMaxLength(80);
+        b.Property(x => x.Priority).HasMaxLength(20);
+        b.Property(x => x.KeywordsCsv).HasMaxLength(1000);
+        b.Property(x => x.CustomerExplanation).HasMaxLength(4000);
+        b.Property(x => x.AgentGuidance).HasMaxLength(4000);
+        b.Property(x => x.EscalationCriteria).HasMaxLength(2000);
+        b.HasIndex(x => x.ArticleCode).IsUnique();
+        b.HasIndex(x => new { x.IsActive, x.Category });
+    }
+}
+
 public sealed class AuditEventConfiguration : IEntityTypeConfiguration<AuditEvent>
 {
     public void Configure(EntityTypeBuilder<AuditEvent> b)

@@ -153,12 +153,21 @@ public static class DependencyInjection
         var options = configuration.GetSection(AiProviderOptions.SectionName).Get<AiProviderOptions>()
                       ?? new AiProviderOptions();
 
+        var provider = options.Provider.Trim().ToLowerInvariant();
         var liveConfigured =
-            !options.Provider.Equals("deterministic", StringComparison.OrdinalIgnoreCase) &&
+            (provider is "openai-compatible" or "azure-openai") &&
             !string.IsNullOrWhiteSpace(options.BaseUrl) &&
             !string.IsNullOrWhiteSpace(options.ApiKey);
 
-        if (liveConfigured)
+        if (provider == "bedrock")
+        {
+            services.AddScoped<AmazonBedrockAiProvider>();
+            services.AddScoped<IAiProvider>(sp => new ResilientAiProvider(
+                sp.GetRequiredService<AmazonBedrockAiProvider>(),
+                sp.GetRequiredService<DeterministicFallbackAiProvider>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ResilientAiProvider>>()));
+        }
+        else if (liveConfigured)
         {
             services.AddHttpClient<OpenAiCompatibleAiProvider>((sp, http) =>
             {

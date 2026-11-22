@@ -21,13 +21,21 @@ public sealed record AiSummaryResponse(
     IReadOnlyList<string> OutstandingItems,
     string CurrentState,
     IReadOnlyList<string> Uncertainties,
-    AiProvenanceResponse Provenance);
+    AiProvenanceResponse Provenance)
+{
+    public IReadOnlyList<KnowledgeReferenceResponse> Sources { get; init; } =
+        Array.Empty<KnowledgeReferenceResponse>();
+}
 
 public sealed record AiSuggestedResponseResponse(
     string Subject,
     string Body,
     IReadOnlyList<string> Notes,
-    AiProvenanceResponse Provenance);
+    AiProvenanceResponse Provenance)
+{
+    public IReadOnlyList<KnowledgeReferenceResponse> Sources { get; init; } =
+        Array.Empty<KnowledgeReferenceResponse>();
+}
 
 public sealed record AiSentimentResponse(
     SentimentLabel Label,
@@ -35,6 +43,8 @@ public sealed record AiSentimentResponse(
     double? Confidence,
     bool EscalationRecommended,
     IReadOnlyList<string> Signals,
+    IReadOnlyList<string> FrustrationIndicators,
+    IReadOnlyList<string> UrgencyIndicators,
     AiProvenanceResponse Provenance);
 
 public sealed record NextBestActionResponse(
@@ -42,8 +52,25 @@ public sealed record NextBestActionResponse(
     string Reason,
     string Evidence,
     string Priority,
-    bool RequiresHumanApproval);
+    bool RequiresHumanApproval,
+    string ExpectedOutcome,
+    string ActionType)
+{
+    public string Title { get; init; } = Action;
+
+    public string Explanation { get; init; } = Reason;
+
+    public IReadOnlyList<KnowledgeReferenceResponse> Sources { get; init; } =
+        Array.Empty<KnowledgeReferenceResponse>();
+
+    public string? SuggestedWorkflow { get; init; }
+
+    public double? Confidence { get; init; }
+}
 
 public sealed record NextBestActionsResponse(
     IReadOnlyList<NextBestActionResponse> Actions,
-    AiProvenanceResponse Provenance);
+    AiProvenanceResponse Provenance)
+{
+    public IssueClassificationResponse? Classification { get; init; }
+}

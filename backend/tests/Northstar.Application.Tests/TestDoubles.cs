@@ -1,5 +1,7 @@
 using Northstar.Application.Abstractions;
+using Northstar.Application.Ai;
 using Northstar.Application.Contracts;
+using Northstar.Domain;
 
 namespace Northstar.Application.Tests;
 
@@ -79,4 +81,86 @@ internal sealed class TestUserDirectory : IUserDirectory
 
     public Task<bool> SetActiveAsync(Guid userId, bool isActive, CancellationToken ct) =>
         Task.FromResult(true);
+}
+
+/// <summary>
+/// Deterministic AI provider stub. Defaults mirror the development fallback so
+/// orchestration, persistence and provenance can be tested without a network.
+/// </summary>
+internal sealed class TestAiProvider : IAiProvider
+{
+    public string Name => "test-provider";
+
+    public bool IsLiveInference => false;
+
+    public AiSentiment Sentiment { get; set; } = new(
+        SentimentLabel.Negative,
+        "Customer is frustrated and still waiting.",
+        0.82,
+        EscalationRecommended: false,
+        Signals: new[] { "frustrated", "still waiting" },
+        FrustrationIndicators: new[] { "frustrated" },
+        UrgencyIndicators: new[] { "still waiting" });
+
+    public Task<AiCallResult<AiTicketSummary>> SummarizeAsync(AiTicketContext context, CancellationToken ct) =>
+        Task.FromResult(new AiCallResult<AiTicketSummary>(
+            new AiTicketSummary(
+                "Customer is waiting for an update.",
+                new[] { "Previous message unanswered" },
+                new[] { "Ticket reviewed" },
+                new[] { "Send a status update" },
+                "Open and awaiting agent reply",
+                Array.Empty<string>()),
+            Name,
+            "test-model",
+            IsLiveInference,
+            null,
+            12));
+
+    public Task<AiCallResult<AiSuggestedResponse>> SuggestResponseAsync(
+        AiTicketContext context,
+        IReadOnlyList<string> guidance,
+        CancellationToken ct) =>
+        Task.FromResult(new AiCallResult<AiSuggestedResponse>(
+            new AiSuggestedResponse(
+                "Update on your request",
+                "Thank you for your patience. We are reviewing your request.",
+                true,
+                Array.Empty<string>()),
+            Name,
+            "test-model",
+            IsLiveInference,
+            null,
+            10));
+
+    public Task<AiCallResult<AiSentiment>> AnalyzeSentimentAsync(
+        AiTicketContext context,
+        CancellationToken ct) =>
+        Task.FromResult(new AiCallResult<AiSentiment>(
+            Sentiment,
+            Name,
+            "test-model",
+            IsLiveInference,
+            Sentiment.Confidence,
+            8));
+}
+
+/// <summary>Captures retrieval queries and returns test-controlled knowledge hits.</summary>
+internal sealed class TestKnowledgeRetrieval : IKnowledgeRetrievalService
+{
+    public IReadOnlyList<KnowledgeHit> Hits { get; set; } = Array.Empty<KnowledgeHit>();
+
+    public KnowledgeRetrievalQuery? LastQuery { get; private set; }
+
+    public int LastMaxResults { get; private set; }
+
+    public Task<IReadOnlyList<KnowledgeHit>> RetrieveAsync(
+        KnowledgeRetrievalQuery query,
+        int maxResults = 4,
+        CancellationToken ct = default)
+    {
+        LastQuery = query;
+        LastMaxResults = maxResults;
+        return Task.FromResult(Hits);
+    }
 }

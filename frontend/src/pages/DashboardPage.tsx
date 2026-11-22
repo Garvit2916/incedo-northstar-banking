@@ -4,11 +4,12 @@ import { applicationsApi, customersApi, dashboardApi, ticketsApi } from '../api/
 import { useAuth } from '../auth/AuthContext';
 import { Icon } from '../components/icons';
 import type { IconName } from '../components/icons';
-import { Card, EmptyState, ErrorBanner, ProgressBar, StatusBadge } from '../components/ui';
+import { Badge, Card, EmptyState, ErrorBanner, ProgressBar, StatusBadge } from '../components/ui';
 import { SkeletonCard, SkeletonStats, SkeletonTable } from '../components/Skeleton';
 import { useAsync } from '../lib/useAsync';
-import { formatDateOnly, formatRelative, humanise } from '../lib/format';
+import { formatCurrency, formatDateOnly, formatRelative, humanise } from '../lib/format';
 import type {
+  AccountOverview,
   ApplicationSummaryResponse,
   DashboardStatsResponse,
   PagedResult,
@@ -50,6 +51,8 @@ function greeting(): string {
 export function DashboardPage() {
   const { user, hasRole } = useAuth();
   const isCustomer = hasRole('Customer');
+  const canSupport = hasRole('SupportAgent') || hasRole('Administrator');
+  const canReview = hasRole('Reviewer') || hasRole('Administrator');
 
   const stats = useAsync<DashboardStatsResponse>(
     () => (isCustomer ? dashboardApi.customer() : dashboardApi.operations()),
@@ -63,9 +66,13 @@ export function DashboardPage() {
     () => (isCustomer ? customersApi.me() : Promise.resolve(null)),
     [isCustomer],
   );
-  const tickets = useAsync<PagedResult<TicketSummaryResponse> | null>(
-    () => (isCustomer ? Promise.resolve(null) : ticketsApi.list({ page: 1, pageSize: 4 })),
+  const account = useAsync<AccountOverview | null>(
+    () => (isCustomer ? dashboardApi.accountOverview() : Promise.resolve(null)),
     [isCustomer],
+  );
+  const tickets = useAsync<PagedResult<TicketSummaryResponse> | null>(
+    () => (canSupport ? ticketsApi.list({ page: 1, pageSize: 4 }) : Promise.resolve(null)),
+    [canSupport],
   );
 
   const firstName = (profile.data?.firstName ?? user?.fullName?.split(' ')[0] ?? 'there').trim();
@@ -86,11 +93,18 @@ export function DashboardPage() {
 
   const operationsStats: StatDefinition[] = stats.data
     ? [
-        { label: 'Submitted', value: stats.data.applicationsSubmitted, icon: 'send', tone: 'warning', to: '/reviews' },
-        { label: 'Under review', value: stats.data.applicationsUnderReview, icon: 'clock', tone: 'primary', to: '/reviews' },
-        { label: 'Approved', value: stats.data.applicationsApproved, icon: 'checkCircle', tone: 'success', to: '/reviews' },
-        { label: 'Rejected', value: stats.data.applicationsRejected, icon: 'alertCircle', tone: 'danger', to: '/reviews' },
-        { label: 'Open tickets', value: stats.data.openTickets, icon: 'support', tone: 'accent', to: '/tickets' },
+        ...(canReview
+          ? [
+              { label: 'Submitted', value: stats.data.applicationsSubmitted, icon: 'send' as const, tone: 'warning' as const, to: '/reviews' },
+              { label: 'Under review', value: stats.data.applicationsUnderReview, icon: 'clock' as const, tone: 'primary' as const, to: '/reviews' },
+              { label: 'Approved', value: stats.data.applicationsApproved, icon: 'checkCircle' as const, tone: 'success' as const, to: '/reviews' },
+              { label: 'Rejected', value: stats.data.applicationsRejected, icon: 'alertCircle' as const, tone: 'danger' as const, to: '/reviews' },
+            ]
+          : []),
+        ...(canSupport
+          ? [{ label: 'Open tickets', value: stats.data.openTickets, icon: 'support' as const, tone: 'accent' as const, to: '/support' }]
+          : []),
+        { label: 'Unread updates', value: stats.data.unreadNotifications, icon: 'bell' as const, tone: 'primary' as const, to: '/notifications' },
       ]
     : [];
 
@@ -150,12 +164,19 @@ export function DashboardPage() {
             </>
           ) : (
             <>
-              <Link className="btn btn-primary" to="/tickets">
-                Open support workspace
-                <Icon name="arrowRight" size={16} />
-              </Link>
-              <Link className="btn btn-secondary" to="/reviews">
-                Review queue
+              {canSupport ? (
+                <Link className="btn btn-primary" to="/support">
+                  Open support workspace
+                  <Icon name="arrowRight" size={16} />
+                </Link>
+              ) : (
+                <Link className="btn btn-primary" to="/reviews">
+                  Open review queue
+                  <Icon name="arrowRight" size={16} />
+                </Link>
+              )}
+              <Link className="btn btn-secondary" to="/notifications">
+                Notifications
               </Link>
             </>
           )}
@@ -165,7 +186,7 @@ export function DashboardPage() {
       {stats.error ? (
         <ErrorBanner message={stats.error} onRetry={stats.reload} />
       ) : stats.loading || !stats.data ? (
-        <SkeletonStats count={isCustomer ? 6 : 5} />
+        <SkeletonStats count={tiles.length || (isCustomer ? 6 : 5)} />
       ) : (
         <div className="stat-grid">
           {tiles.map((tile) => (
@@ -184,6 +205,71 @@ export function DashboardPage() {
             </Link>
           ))}
         </div>
+      )}
+
+      {isCustomer && (
+        <Card
+          className="account-overview-card"
+          title="Account overview"
+          subtitle="Illustrative account view — not connected to a real bank account"
+          actions={<Badge tone="accent" dot={false}>Demo data</Badge>}
+        >
+          {account.loading ? (
+            <SkeletonCard />
+          ) : account.error ? (
+            <ErrorBanner message={account.error} onRetry={account.reload} />
+          ) : account.data ? (
+            <div className="account-overview">
+              <div className="account-summary">
+                <span className="account-label">
+                  <Icon name="wallet" size={15} /> {account.data.accountName}
+                </span>
+                <strong className="account-balance">{formatCurrency(account.data.availableBalance)}</strong>
+                <div className="account-identifiers">
+                  <span>{account.data.maskedAccountNumber}</span>
+                  <span>{account.data.maskedIfsc}</span>
+                  <span>{account.data.branch}</span>
+                </div>
+                <p className="account-notice">
+                  <Icon name="info" size={13} /> {account.data.demoNotice}
+                </p>
+              </div>
+              <div className="account-activity">
+                <h3>Recent activity</h3>
+                <ul>
+                  {account.data.transactions.map((transaction) => (
+                    <li key={transaction.reference}>
+                      <span className={`account-txn-icon ${transaction.direction === 'Credit' ? 'credit' : 'debit'}`}>
+                        <Icon name={transaction.direction === 'Credit' ? 'download' : 'upload'} size={14} />
+                      </span>
+                      <span className="account-txn-main">
+                        <strong>{transaction.narration}</strong>
+                        <small>{formatDateOnly(transaction.postedAtUtc)} · {transaction.category}</small>
+                      </span>
+                      <span className={transaction.direction === 'Credit' ? 'amount-credit' : 'amount-debit'}>
+                        {transaction.direction === 'Credit' ? '+' : '−'}{formatCurrency(Math.abs(transaction.amount))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="account-products">
+                <h3>Active products</h3>
+                <ul>
+                  {account.data.activeProducts.map((product, index) => (
+                    <li key={`${product.productCode}-${index}`}>
+                      <span className="badge badge--info">{product.productCode || 'DEMO'}</span>
+                      <div>
+                        <strong>{product.name}</strong>
+                        <small>{product.reference} · {product.status}</small>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : null}
+        </Card>
       )}
 
       <div className="dashboard-grid">
@@ -254,12 +340,12 @@ export function DashboardPage() {
                 </div>
               )}
             </Card>
-          ) : (
+          ) : canSupport ? (
             <Card
               title="Latest tickets"
               subtitle="Newest customer conversations"
               actions={
-                <Link to="/tickets" className="link-button text-xs">
+                <Link to="/support" className="link-button text-xs">
                   View all
                 </Link>
               }
@@ -278,7 +364,7 @@ export function DashboardPage() {
               ) : (
                 <div className="app-list">
                   {tickets.data.items.map((ticket) => (
-                    <Link key={ticket.id} to={`/tickets/${ticket.id}`} className="app-row">
+                    <Link key={ticket.id} to={`/support/${ticket.id}`} className="app-row">
                       <div className="app-row-main">
                         <span className="app-row-ref">
                           <Icon name="support" size={13} />
@@ -303,6 +389,23 @@ export function DashboardPage() {
                 </div>
               )}
             </Card>
+          ) : (
+            <Card
+              title="Review focus"
+              subtitle="Application decisions waiting on an authorised reviewer"
+              actions={<Link to="/reviews" className="link-button text-xs">Open queue</Link>}
+            >
+              <div className="review-focus">
+                <div>
+                  <span className="stat-label">Submitted</span>
+                  <strong>{stats.data?.applicationsSubmitted ?? '—'}</strong>
+                </div>
+                <div>
+                  <span className="stat-label">Under review</span>
+                  <strong>{stats.data?.applicationsUnderReview ?? '—'}</strong>
+                </div>
+              </div>
+            </Card>
           )}
 
           <Card title="Quick actions" subtitle="Jump straight to the task at hand">
@@ -314,8 +417,13 @@ export function DashboardPage() {
                     { to: '/profile', category: 'Profile', title: 'Complete your profile', body: 'Keep KYC details accurate for faster decisions.' },
                   ]
                 : [
-                    { to: '/tickets', category: 'Support', title: 'Customer conversations', body: 'Reply, assign and escalate with AI assistance.' },
-                    { to: '/reviews', category: 'Review', title: 'Decision queue', body: 'Assess applications and record auditable decisions.' },
+                    ...(canSupport
+                      ? [{ to: '/support', category: 'Support', title: 'Customer conversations', body: 'Reply, assign and escalate with AI assistance.' }]
+                      : []),
+                    ...(canReview
+                      ? [{ to: '/reviews', category: 'Review', title: 'Decision queue', body: 'Assess applications and record auditable decisions.' }]
+                      : []),
+                    { to: '/notifications', category: 'Updates', title: 'Notifications', body: 'Read unread updates from the workspace.' },
                     ...(hasRole('Administrator')
                       ? [{ to: '/admin/users', category: 'Admin', title: 'Users & roles', body: 'Manage access and account status.' }]
                       : []),
@@ -369,48 +477,70 @@ export function DashboardPage() {
                   ))}
                 </div>
                 <p className="muted text-sm" style={{ marginTop: 'var(--space-3)' }}>
-                  You can apply for products, manage your profile and track your onboarding. Support
-                  and review tools are restricted to operations roles.
+                  You can apply for products, manage your profile, raise a support ticket and track
+                  your onboarding. Support and review tools are restricted to operations roles.
                 </p>
+                <Link to="/my-tickets" className="btn btn-secondary btn-sm" style={{ marginTop: 'var(--space-3)' }}>
+                  <Icon name="support" size={14} />
+                  My tickets
+                </Link>
               </Card>
             </>
           ) : (
             <>
-              <Card title="Decision pipeline" subtitle="Current application distribution">
-                {stats.loading || !stats.data ? (
-                  <SkeletonCard />
-                ) : pipelineTotal === 0 ? (
-                  <EmptyState icon="reviews" message="No applications in the pipeline yet." />
-                ) : (
-                  <div className="breakdown">
-                    <div
-                      className="donut"
-                      style={
-                        {
-                          '--a': percentage(pipeline[0].value),
-                          '--b': percentage(pipeline[1].value),
-                          '--c': percentage(pipeline[2].value),
-                          '--d': percentage(pipeline[3].value),
-                        } as CSSProperties
-                      }
-                    >
-                      <div className="donut-center">
-                        <strong>{pipelineTotal}</strong>
-                        <span>Applications</span>
+              {canReview ? (
+                <Card title="Decision pipeline" subtitle="Current application distribution">
+                  {stats.loading || !stats.data ? (
+                    <SkeletonCard />
+                  ) : pipelineTotal === 0 ? (
+                    <EmptyState icon="reviews" message="No applications in the pipeline yet." />
+                  ) : (
+                    <div className="breakdown">
+                      <div
+                        className="donut"
+                        style={
+                          {
+                            '--a': percentage(pipeline[0].value),
+                            '--b': percentage(pipeline[1].value),
+                            '--c': percentage(pipeline[2].value),
+                            '--d': percentage(pipeline[3].value),
+                          } as CSSProperties
+                        }
+                      >
+                        <div className="donut-center">
+                          <strong>{pipelineTotal}</strong>
+                          <span>Applications</span>
+                        </div>
                       </div>
+                      <ul className="legend">
+                        {pipeline.map((item) => (
+                          <li className="legend-item" key={item.label}>
+                            <span className="swatch" style={{ background: item.color }} />
+                            {item.label}
+                            <span className="legend-value">{item.value}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-                    <ul className="legend">
-                      {pipeline.map((item) => (
-                        <li className="legend-item" key={item.label}>
-                          <span className="swatch" style={{ background: item.color }} />
-                          {item.label}
-                          <span className="legend-value">{item.value}</span>
-                        </li>
-                      ))}
-                    </ul>
+                  )}
+                </Card>
+              ) : (
+                <Card title="Copilot readiness" subtitle="Approved guidance behind every suggestion">
+                  <div className="support-readiness">
+                    <span className="stat-icon stat-icon--accent"><Icon name="file" size={16} /></span>
+                    <div>
+                      <strong>Approved knowledge base</strong>
+                      <p className="muted text-sm">
+                        Search the knowledge base and see exactly which articles ground Copilot output.
+                      </p>
+                    </div>
                   </div>
-                )}
-              </Card>
+                  <Link to="/knowledge" className="btn btn-secondary btn-sm">
+                    Browse knowledge base
+                    <Icon name="arrowRight" size={14} />
+                  </Link>
+                </Card>
+              )}
 
               <Card title="Your access" subtitle="Role-based capabilities">
                 <div className="profile-badges">

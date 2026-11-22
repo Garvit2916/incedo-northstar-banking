@@ -2,14 +2,20 @@ import { buildQuery, fetchBlob, http, setSession } from './client';
 import type {
   ApplicationDetailResponse,
   ApplicationStatus,
+  AccountOverview,
   ApplicationStatusHistoryResponse,
   ApplicationSummaryResponse,
   AuditEventResponse,
   AuthResponse,
+  CreateCustomerTicketRequest,
+  CustomerTicketDetailResponse,
+  CustomerTicketSummaryResponse,
   DashboardStatsResponse,
   DocumentResponse,
   DocumentReviewStatus,
   DownloadLinkResponse,
+  KnowledgeArticle,
+  KnowledgeQuery,
   KycDocumentType,
   NotificationResponse,
   PagedResult,
@@ -20,6 +26,7 @@ import type {
   TicketPriority,
   TicketStatus,
   TicketSummaryResponse,
+  TicketOverviewResponse,
   UserSummary,
   AiSummaryResponse,
   AiSuggestedResponse,
@@ -130,6 +137,16 @@ export const customersApi = {
   update: (input: Partial<ProfileResponse>) => http.put<ProfileResponse>('/api/customers/me', input),
 };
 
+export const customerTicketsApi = {
+  create: (input: CreateCustomerTicketRequest) =>
+    http.post<CustomerTicketSummaryResponse>('/api/customer/tickets', input),
+  list: (page = 1, pageSize = 50) =>
+    http.get<PagedResult<CustomerTicketSummaryResponse>>(
+      `/api/customer/tickets${buildQuery({ page, pageSize })}`,
+    ),
+  get: (id: string) => http.get<CustomerTicketDetailResponse>(`/api/customer/tickets/${id}`),
+};
+
 export const ticketsApi = {
   list: (
     params: {
@@ -142,6 +159,7 @@ export const ticketsApi = {
       pageSize?: number;
     } = {},
   ) => http.get<PagedResult<TicketSummaryResponse>>(`/api/tickets${buildQuery(params)}`),
+  overview: () => http.get<TicketOverviewResponse>('/api/tickets/overview'),
   get: (id: string) => http.get<TicketDetailResponse>(`/api/tickets/${id}`),
   create: (input: {
     subject: string;
@@ -166,6 +184,15 @@ export const ticketsApi = {
     nextBestActions: (id: string) =>
       http.post<NextBestActionsResponse>(`/api/tickets/${id}/ai/next-best-actions`),
   },
+};
+
+export const knowledgeApi = {
+  search: (query: KnowledgeQuery = {}) =>
+    http.get<PagedResult<KnowledgeArticle>>(
+      `/api/knowledge${buildQuery(query as Record<string, string | number | undefined>)}`,
+    ),
+  categories: () => http.get<string[]>('/api/knowledge/categories'),
+  get: (id: string) => http.get<KnowledgeArticle>(`/api/knowledge/${id}`),
 };
 
 export const adminApi = {
@@ -195,5 +222,6 @@ export const adminApi = {
 
 export const dashboardApi = {
   customer: () => http.get<DashboardStatsResponse>('/api/dashboard/customer'),
+  accountOverview: () => http.get<AccountOverview>('/api/dashboard/account-overview'),
   operations: () => http.get<DashboardStatsResponse>('/api/dashboard/operations'),
 };

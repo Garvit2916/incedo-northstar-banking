@@ -1,5 +1,6 @@
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
+using Northstar.Application.Abstractions;
 using Northstar.Application.Services;
 using Northstar.Application.Validation;
 
@@ -21,6 +22,9 @@ public static class DependencyInjection
         services.AddScoped<AiAssistanceService>();
         services.AddScoped<DashboardService>();
         services.AddScoped<AdminService>();
+        services.AddScoped<KnowledgeService>();
+        services.AddScoped<IKnowledgeRetrievalService, KnowledgeRetrievalService>();
+        services.AddScoped<AccountOverviewService>();
 
         return services;
     }

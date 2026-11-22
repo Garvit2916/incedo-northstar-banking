@@ -88,7 +88,20 @@ public enum TicketCategory
     MissingDocuments = 2,
     StatusEnquiry = 3,
     NotificationIssue = 4,
-    Other = 5
+    Other = 5,
+
+    // Banking-specific categories used by the demo support knowledge base and
+    // deterministic issue classifier. Appended to preserve persisted values.
+    CardTransactionDispute = 6,
+    UnauthorizedTransaction = 7,
+    CardBlockingReplacement = 8,
+    CreditCardBilling = 9,
+    FailedUpiTransaction = 10,
+    BankTransferIssue = 11,
+    KycVerification = 12,
+    PersonalLoan = 13,
+    FixedDeposit = 14,
+    ProductInquiry = 15
 }
 
 public enum SentimentLabel

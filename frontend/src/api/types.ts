@@ -29,9 +29,21 @@ export type TicketCategory =
   | 'MissingDocuments'
   | 'StatusEnquiry'
   | 'NotificationIssue'
+  | 'CardTransactionDispute'
+  | 'UnauthorizedTransaction'
+  | 'CardBlockingReplacement'
+  | 'CreditCardBilling'
+  | 'FailedUpiTransaction'
+  | 'BankTransferIssue'
+  | 'KycVerification'
+  | 'PersonalLoan'
+  | 'FixedDeposit'
+  | 'ProductInquiry'
   | 'Other';
 
 export type MessageAuthorType = 'Customer' | 'Agent' | 'System';
+
+export type SentimentLabel = 'Positive' | 'Neutral' | 'Negative' | 'UrgentEscalation';
 
 export type KycDocumentType =
   | 'ProofOfIdentity'
@@ -175,6 +187,29 @@ export interface TicketSummaryResponse {
   createdAtUtc: string;
   updatedAtUtc: string;
   messageCount: number;
+  latestSentiment: SentimentLabel | null;
+  sentimentAnalyzedAtUtc: string | null;
+}
+
+export interface CreateCustomerTicketRequest {
+  subject: string;
+  description: string;
+  category: TicketCategory;
+  priority: TicketPriority;
+  relatedApplicationId?: string | null;
+}
+
+export interface TicketOverviewResponse {
+  openTickets: number;
+  unassignedTickets: number;
+  urgentTickets: number;
+  escalatedTickets: number;
+  awaitingCustomer: number;
+  resolvedToday: number;
+  assignedToMe: number;
+  negativeSentiment: number;
+  urgentEscalationSentiment: number;
+  analyzedSentiment: number;
 }
 
 export interface TicketDetailResponse {
@@ -192,7 +227,94 @@ export interface TicketDetailResponse {
   resolvedAtUtc: string | null;
   createdAtUtc: string;
   updatedAtUtc: string;
+  latestSentiment: SentimentLabel | null;
+  sentimentAnalyzedAtUtc: string | null;
   messages: TicketMessageResponse[];
+}
+
+/** Customer endpoints never return internal agent sentiment triage signals. */
+export type CustomerTicketSummaryResponse = Omit<
+  TicketSummaryResponse,
+  'latestSentiment' | 'sentimentAnalyzedAtUtc'
+>;
+
+export type CustomerTicketDetailResponse = Omit<
+  TicketDetailResponse,
+  'latestSentiment' | 'sentimentAnalyzedAtUtc'
+>;
+
+export interface KnowledgeArticle {
+  id: string;
+  articleCode: string;
+  title: string;
+  category: string;
+  tags: string[];
+  keywords: string[];
+  content: string;
+  applicableProduct: string;
+  issueType: string;
+  priority: string;
+  resolutionSteps: string[];
+  customerExplanation: string;
+  agentGuidance: string;
+  escalationCriteria: string;
+  isActive: boolean;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
+export interface KnowledgeReference {
+  id: string;
+  articleCode: string;
+  title: string;
+  category: string;
+  score: number;
+  matchReason: string;
+}
+
+export interface KnowledgeQuery {
+  search?: string;
+  category?: string;
+  product?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface IssueClassification {
+  suggestedCategory: string;
+  issueType: string;
+  confidence: number;
+  signals: string[];
+  explanation: string;
+}
+
+export interface AccountTransaction {
+  reference: string;
+  postedAtUtc: string;
+  narration: string;
+  category: string;
+  amount: number;
+  direction: 'Credit' | 'Debit';
+}
+
+export interface ActiveProduct {
+  name: string;
+  productCode: string;
+  reference: string;
+  status: string;
+}
+
+export interface AccountOverview {
+  accountName: string;
+  accountType: string;
+  maskedAccountNumber: string;
+  maskedIfsc: string;
+  branch: string;
+  currency: string;
+  availableBalance: number;
+  transactions: AccountTransaction[];
+  activeProducts: ActiveProduct[];
+  demoNotice: string;
 }
 
 export interface AiProvenance {
@@ -211,6 +333,7 @@ export interface AiSummaryResponse {
   currentState: string;
   uncertainties: string[];
   provenance: AiProvenance;
+  sources: KnowledgeReference[];
 }
 
 export interface AiSuggestedResponse {
@@ -218,28 +341,47 @@ export interface AiSuggestedResponse {
   body: string;
   notes: string[];
   provenance: AiProvenance;
+  sources: KnowledgeReference[];
 }
 
 export interface AiSentimentResponse {
-  label: string;
+  label: SentimentLabel;
   explanation: string;
   confidence: number | null;
   escalationRecommended: boolean;
   signals: string[];
+  frustrationIndicators: string[];
+  urgencyIndicators: string[];
   provenance: AiProvenance;
 }
 
 export interface NextBestAction {
   action: string;
+  title: string;
   reason: string;
+  explanation: string;
   evidence: string;
   priority: string;
   requiresHumanApproval: boolean;
+  expectedOutcome: string;
+  actionType:
+    | 'reply'
+    | 'request-documents'
+    | 'verify-identity'
+    | 'review-application'
+    | 'escalate'
+    | 'resolve'
+    | 'follow-up'
+    | 'clarify';
+  sources: KnowledgeReference[];
+  suggestedWorkflow: string | null;
+  confidence: number | null;
 }
 
 export interface NextBestActionsResponse {
   actions: NextBestAction[];
   provenance: AiProvenance;
+  classification: IssueClassification | null;
 }
 
 export interface NotificationResponse {

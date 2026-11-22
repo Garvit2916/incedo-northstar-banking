@@ -24,7 +24,7 @@ Pure business model — no EF Core, no ASP.NET.
 - **Entities**: `Application`, `ApplicationStatusHistory`, `CustomerProfile`,
   `KycDocument`, `Product`, `Ticket`, `TicketMessage`, `TicketAssignment`,
   `Notification`, `AuditEvent`, `OutboxMessage`, `RefreshToken`,
-  `AiAssistanceRecord`.
+  `AiAssistanceRecord`, `KnowledgeArticle`.
 - **Enums** (`Enums.cs`): `ApplicationStatus`, `TicketStatus`, `TicketPriority`,
   `TicketCategory`, `MessageAuthorType`, `KycDocumentType`,
   `DocumentReviewStatus`, `ScanStatus`, `NotificationType`, `Roles`.
@@ -56,8 +56,9 @@ Use-case services and contracts. This layer knows *what* the system does, not
 *how* it is stored or transported.
 
 - **Services**: `ApplicationService`, `CustomerService`, `DocumentService`,
-  `TicketService`, `NotificationService`, `AiAssistanceService`,
-  `ProductService`, `AdminService`, `DashboardService`.
+  `TicketService` (agent and customer self-service ticket use cases),
+  `NotificationService`, `AiAssistanceService`, `ProductService`, `AdminService`,
+  `DashboardService`, `KnowledgeService`, `AccountOverviewService`.
 - **Contracts**: request/response DTOs grouped by area (`ApplicationContracts`,
   `TicketContracts`, …) in `Contracts/`.
 - **Ports** (`Abstractions/`): `IApplicationDbContext`, `IAiProvider`,
@@ -65,9 +66,15 @@ Use-case services and contracts. This layer knows *what* the system does, not
   `INotificationService`, `ICurrentUser`, `IDateTimeProvider`,
   `IReferenceGenerator`, `IAuthService`, `IUserDirectory`.
 - **Validation**: FluentValidation validators; failures surface as HTTP 400.
-- **AI orchestration**: prompt assembly, guidance catalog, sentiment rules and
-  the deterministic next-best-action engine live here, independent of the
-  concrete model provider.
+- **AI orchestration**: prompt assembly, guidance catalog, sentiment rules,
+  assistive `IssueClassifier`, deterministic retrieval/ranking and the grounded
+  next-best-action engine live here, independent of the concrete model provider.
+- **Knowledge**: 26 read-only demo articles are stored as portability-friendly
+  delimited/JSON strings. `IKnowledgeRetrievalService` returns explainable scored
+  hits; a vector index can replace it without changing callers.
+- **Demo account view**: `AccountOverviewService` derives deterministic,
+  masked, customer-scoped demo data. There is no new ledger entity or real
+  banking integration.
 
 Services receive `IApplicationDbContext` and their collaborators via
 constructor injection and are registered with `AddApplication()`.
@@ -86,8 +93,9 @@ Adapters and persistence. Everything external lives here.
   selected by `Storage:Provider`.
 - **Email**: `NoopEmailSender`, `SmtpEmailSender`,
   `AzureCommunicationEmailSender`, selected by `Email:Provider`.
-- **AI**: `DeterministicFallbackAiProvider` (default) and
-  `OpenAiCompatibleAiProvider`, wrapped by `ResilientAiProvider`.
+- **AI**: `DeterministicFallbackAiProvider` (default), `AmazonBedrockAiProvider`
+  (Converse API, AWS default credential chain) and `OpenAiCompatibleAiProvider`,
+  wrapped by `ResilientAiProvider`.
 - **Cross-cutting**: `AuditWriter`, `OutboxProcessor` (hosted service),
   `ReferenceGenerator`, `SystemDateTimeProvider`, `DevelopmentFileScanner`.
 
@@ -123,7 +131,10 @@ Key relationships (SQLite enforces foreign keys):
 
 By design there are **no foreign keys** on loose reference ids that may dangle
 by intent: `Ticket.CustomerUserId`, `Ticket.AssignedAgentId`,
-`TicketMessage.AuthorUserId`, `TicketAssignment.*UserId`,
+`TicketMessage.AuthorUserId`, `TicketAssignment.*UserId`. Customer self-service
+ticket endpoints derive `CustomerUserId` from `ICurrentUser`, scope reads to that
+id, filter `IsInternalNote` from customer-facing detail/count projections and
+use customer-specific DTOs that omit internal sentiment analytics;
 `AuditEvent.ActorUserId`, `RefreshToken.UserId`. Persisted references that must
 be valid (`CustomerProfile.UserId`, `Notification.UserId`) **do** have FKs.
 
@@ -154,11 +165,36 @@ reviewers/administrators may set the review status. Downloads are served through
 the authenticated content endpoint (or a presigned URL when Azure storage is
 configured).
 
-**Support + AI.** Agents open tickets, append public messages or internal notes,
-reassign and change status. On demand, four AI helpers run over the ticket
-thread; the deterministic provider guarantees offline behaviour and the resilient
-wrapper falls back to it if a live model errors. Every AI response carries
-provenance metadata and is marked as requiring human review.
+**Support + AI.** Agents work the three-panel support workspace: a filterable
+inbox with operations overview metrics, the conversation/composer, and the AI
+copilot. Agents append public messages or internal notes, reassign and change
+status. On demand, four AI helpers run over the ticket thread (summary,
+suggested response, sentiment, next-best actions); the deterministic provider
+guarantees offline behaviour and the resilient wrapper falls back to it if a
+live model errors. Sentiment is persisted on the ticket (`LatestSentiment`,
+`SentimentAnalyzedAtUtc`) and exposed in the list, detail and overview
+responses. Next-best actions are typed (`reply`, `request-documents`,
+`verify-identity`, `review-application`, `escalate`, `resolve`, `follow-up`,
+`clarify`) with an expected outcome; status-changing recommendations require
+explicit agent confirmation and are never executed automatically. Every AI
+response carries provenance metadata and is marked as requiring human review.
+The summariser's live response is mapped onto the six workspace sections
+(issue, customer context, actions taken, current status, pending resolution,
+uncertainties).
+
+**Knowledge grounding.** Before producing a summary, suggested reply or action
+list, `AiAssistanceService` builds a minimised ticket context and queries
+`IKnowledgeRetrievalService`. Scored articles are attached as citations with
+their match reason. The assistive classifier also examines the subject,
+description and conversation as untrusted data and supplies a suggested issue
+type with matched signals; the persisted category is never auto-changed. Every
+returned action carries a title, explanation, priority, expected outcome,
+optional confidence, a safe mock workflow requiring human confirmation and the
+articles that produced it. Related application context is included only for
+reviewers/administrators; support agents receive ticket-only context so AI output
+cannot reveal application data they cannot open through the normal API. Sensitive
+drafts never request secrets or document links by email, and there is no AI
+endpoint that can execute a status change, approval, block or refund.
 
 **Notifications.** In-app notifications are queued inline within the same
 transaction as the triggering change. Outbound email is queued as an

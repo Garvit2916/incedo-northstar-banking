@@ -36,6 +36,7 @@ public sealed class AiAssistanceService
     private readonly IDateTimeProvider _clock;
     private readonly IAuditWriter _audit;
     private readonly IAiProvider _provider;
+    private readonly IKnowledgeRetrievalService _knowledge;
 
     public AiAssistanceService(
         IApplicationDbContext db,
@@ -43,17 +44,30 @@ public sealed class AiAssistanceService
         IDateTimeProvider clock,
         IAuditWriter audit,
         IAiProvider provider)
+        : this(db, currentUser, clock, audit, provider, new EmptyKnowledgeRetrievalService())
+    {
+    }
+
+    public AiAssistanceService(
+        IApplicationDbContext db,
+        ICurrentUser currentUser,
+        IDateTimeProvider clock,
+        IAuditWriter audit,
+        IAiProvider provider,
+        IKnowledgeRetrievalService knowledge)
     {
         _db = db;
         _currentUser = currentUser;
         _clock = clock;
         _audit = audit;
         _provider = provider;
+        _knowledge = knowledge;
     }
 
     public async Task<AiSummaryResponse> SummarizeAsync(Guid ticketId, CancellationToken ct)
     {
         var (ticket, context) = await BuildContextAsync(ticketId, ct);
+        var (hits, _) = await RetrieveKnowledgeAsync(context, ct);
 
         var result = await _provider.SummarizeAsync(context, ct);
         await RecordAsync(ticket, AiAssistKind.Summary, context, result, null, ct);
@@ -66,13 +80,22 @@ public sealed class AiAssistanceService
             value.OutstandingItems,
             value.CurrentState,
             value.Uncertainties,
-            Provenance(result.Provider, result.Model, result.IsLiveInference, result.Confidence));
+            Provenance(result.Provider, result.Model, result.IsLiveInference, result.Confidence))
+        {
+            Sources = hits.Select(ToReference).ToList()
+        };
     }
 
     public async Task<AiSuggestedResponseResponse> SuggestResponseAsync(Guid ticketId, CancellationToken ct)
     {
         var (ticket, context) = await BuildContextAsync(ticketId, ct);
-        var guidance = SupportGuidanceCatalog.For(ticket.Category);
+        var (hits, _) = await RetrieveKnowledgeAsync(context, ct);
+
+        var guidance = SupportGuidanceCatalog.For(ticket.Category)
+            .Concat(hits.SelectMany(h => h.ResolutionSteps))
+            .Concat(hits.Select(h => h.AgentGuidance))
+            .Take(12)
+            .ToList();
 
         var result = await _provider.SuggestResponseAsync(context, guidance, ct);
         await RecordAsync(ticket, AiAssistKind.SuggestedResponse, context, result, null, ct);
@@ -82,7 +105,10 @@ public sealed class AiAssistanceService
             value.Subject,
             value.Body,
             value.Notes,
-            Provenance(result.Provider, result.Model, result.IsLiveInference, null));
+            Provenance(result.Provider, result.Model, result.IsLiveInference, null))
+        {
+            Sources = hits.Select(ToReference).ToList()
+        };
     }
 
     public async Task<AiSentimentResponse> AnalyzeSentimentAsync(Guid ticketId, CancellationToken ct)
@@ -90,6 +116,9 @@ public sealed class AiAssistanceService
         var (ticket, context) = await BuildContextAsync(ticketId, ct);
 
         var result = await _provider.AnalyzeSentimentAsync(context, ct);
+
+        var tracked = await _db.Tickets.FirstAsync(t => t.Id == ticket.Id, ct);
+        tracked.RecordSentiment(result.Value.Label, _clock.UtcNow);
         await RecordAsync(ticket, AiAssistKind.SentimentAnalysis, context, result, result.Value.Confidence, ct);
 
         var value = result.Value;
@@ -99,18 +128,21 @@ public sealed class AiAssistanceService
             value.Confidence,
             value.EscalationRecommended,
             value.Signals,
+            value.FrustrationIndicators,
+            value.UrgencyIndicators,
             Provenance(result.Provider, result.Model, result.IsLiveInference, result.Confidence));
     }
 
     public async Task<NextBestActionsResponse> NextBestActionsAsync(Guid ticketId, CancellationToken ct)
     {
         var (ticket, context) = await BuildContextAsync(ticketId, ct);
+        var (hits, classification) = await RetrieveKnowledgeAsync(context, ct);
 
         var sentiment = SentimentRules.Analyze(context);
         var lastFromCustomer = context.Conversation.Count > 0 &&
                                context.Conversation[^1].Author == "customer";
-
         var openAge = (int)Math.Floor((_clock.UtcNow - ticket.CreatedAtUtc).TotalDays);
+        var conversationBody = context.Conversation.Select(m => m.Body).ToList();
 
         var actions = NextBestActionEngine.Recommend(new NextBestActionInput(
             ticket.Category,
@@ -119,17 +151,43 @@ public sealed class AiAssistanceService
             openAge,
             lastFromCustomer,
             context.Application,
-            sentiment.Label));
+            sentiment.Label,
+            context.Subject,
+            context.Description,
+            conversationBody,
+            hits,
+            classification));
 
         var response = new NextBestActionsResponse(
             actions.Select(a => new NextBestActionResponse(
-                a.Action, a.Reason, a.Evidence, a.Priority, a.RequiresHumanApproval)).ToList(),
+                a.Action,
+                a.Reason,
+                a.Evidence,
+                a.Priority,
+                a.RequiresHumanApproval,
+                a.ExpectedOutcome,
+                a.ActionType)
+            {
+                Title = a.Title,
+                Explanation = a.Explanation,
+                Sources = a.Sources.Select(ToReference).ToList(),
+                SuggestedWorkflow = a.SuggestedWorkflow,
+                Confidence = a.Confidence
+            }).ToList(),
             new AiProvenanceResponse(
                 "deterministic-rules",
                 null,
                 IsLiveInference: false,
                 RequiresHumanReview: true,
-                Disclaimer));
+                Disclaimer))
+        {
+            Classification = new IssueClassificationResponse(
+                classification.SuggestedCategory,
+                classification.IssueType,
+                classification.Confidence,
+                classification.Signals,
+                classification.Explanation)
+        };
 
         var record = new AiAssistanceRecord
         {
@@ -139,8 +197,8 @@ public sealed class AiAssistanceService
             Model = null,
             IsLiveInference = false,
             InputHash = HashContext(context),
-            OutputJson = JsonSerializer.Serialize(response.Actions),
-            Confidence = null,
+            OutputJson = JsonSerializer.Serialize(response),
+            Confidence = classification.Confidence,
             LatencyMs = 0,
             CreatedByUserId = RequireUserId(),
             CreatedAtUtc = _clock.UtcNow,
@@ -149,6 +207,19 @@ public sealed class AiAssistanceService
 
         _db.AiAssistanceRecords.Add(record);
         await _db.SaveChangesAsync(ct);
+
+        await _audit.RecordAsync(
+            "ai.next-best-actions",
+            "Ticket",
+            ticket.Id.ToString(),
+            new
+            {
+                provider = "deterministic-rules",
+                isLiveInference = false,
+                classification.SuggestedCategory,
+                actionCount = response.Actions.Count
+            },
+            ct: ct);
 
         return response;
     }
@@ -164,7 +235,10 @@ public sealed class AiAssistanceService
             ?? throw new NotFoundException("Ticket was not found.");
 
         AiApplicationContext? applicationContext = null;
-        if (ticket.RelatedApplicationId is { } applicationId)
+        // Support agents can read tickets but not applications. Only reviewers and
+        // administrators may inject related-application data into AI context or a
+        // provider request; everyone else receives ticket-only context.
+        if (CanViewRelatedApplication() && ticket.RelatedApplicationId is { } applicationId)
         {
             var application = await _db.Applications
                 .AsNoTracking()
@@ -204,10 +278,34 @@ public sealed class AiAssistanceService
             ticket.Priority.ToString(),
             ticket.Status.ToString(),
             conversation,
-            applicationContext);
+            applicationContext,
+            Truncate(ticket.Description, 2000));
 
         return (ticket, context);
     }
+
+    private async Task<(IReadOnlyList<KnowledgeHit> Hits, IssueClassification Classification)>
+        RetrieveKnowledgeAsync(AiTicketContext context, CancellationToken ct)
+    {
+        var classification = IssueClassifier.Classify(context);
+        var retrievalCategory = classification.Confidence >= 0.4 &&
+                                !classification.SuggestedCategory.Equals("Other", StringComparison.OrdinalIgnoreCase)
+            ? classification.SuggestedCategory
+            : context.Category;
+
+        var query = new KnowledgeRetrievalQuery(
+            retrievalCategory,
+            context.Subject,
+            context.Description,
+            context.Conversation.Select(m => m.Body).ToList(),
+            context.Application?.ProductName);
+
+        var hits = await _knowledge.RetrieveAsync(query, 4, ct);
+        return (hits, classification);
+    }
+
+    private static KnowledgeReferenceResponse ToReference(KnowledgeHit hit) =>
+        new(hit.ArticleId, hit.ArticleCode, hit.Title, hit.Category, hit.Score, hit.MatchReason);
 
     private async Task RecordAsync<T>(
         Ticket ticket,
@@ -261,6 +359,9 @@ public sealed class AiAssistanceService
 
     private static AiProvenanceResponse Provenance(string provider, string? model, bool isLive, double? confidence) =>
         new(provider, model, isLive, RequiresHumanReview: true, Disclaimer);
+
+    private bool CanViewRelatedApplication() =>
+        _currentUser.IsInRole(Roles.Reviewer) || _currentUser.IsInRole(Roles.Administrator);
 
     private Guid RequireUserId() =>
         _currentUser.UserId ?? throw new ForbiddenException("Authentication is required.");

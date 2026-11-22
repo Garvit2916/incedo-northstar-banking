@@ -115,11 +115,43 @@ ExpectStatus "refresh reuse -> 401" 401 { Post "$base/api/auth/refresh" $null (@
 Step "GET me" { (Invoke-RestMethod -Uri "$base/api/auth/me" -Headers $CH).email }
 
 # ---------------------------------------------------------------- read paths
-Step "products list" { (Invoke-RestMethod -Uri "$base/api/products" -Headers $CH).Count }
+Step "products list" {
+    $p = Invoke-RestMethod -Uri "$base/api/products" -Headers $CH
+    $n = $p.Count
+    if ($n -lt 4) { throw "expected at least 4 products, got $n" }
+    $n
+}
 Step "customers/me" { (Invoke-RestMethod -Uri "$base/api/customers/me" -Headers $CH).userId }
 Step "dashboard customer" { $d = Invoke-RestMethod -Uri "$base/api/dashboard/customer" -Headers $CH; "status=" + $d.status }
 Step "dashboard operations" { $d = Invoke-RestMethod -Uri "$base/api/dashboard/operations" -Headers $AH; "status=" + $d.status }
+Step "account overview masks identifiers" {
+    $a = Invoke-RestMethod -Uri "$base/api/dashboard/account-overview" -Headers $CH
+    # Use the regex escape for U+2022: Windows PowerShell may read this no-BOM
+    # script as ANSI and corrupt literal bullet characters.
+    if ($a.maskedAccountNumber -notmatch '\u2022') { throw "account number is not masked" }
+    if ($a.maskedIfsc -notmatch '\u2022') { throw "IFSC is not masked" }
+    if ($a.maskedAccountNumber -match "\d{10,}") { throw "full account number leaked" }
+    if ([string]::IsNullOrWhiteSpace($a.demoNotice)) { throw "missing demo notice" }
+    "balance=$($a.availableBalance) $($a.maskedAccountNumber)"
+}
+Step "account overview has demo activity and products" {
+    $a = Invoke-RestMethod -Uri "$base/api/dashboard/account-overview" -Headers $CH
+    $tx = @($a.transactions).Count
+    $products = @($a.activeProducts).Count
+    if ($tx -lt 1 -or $products -lt 1) { throw "transactions=$tx products=$products" }
+    "transactions=$tx activeProducts=$products"
+}
+ExpectStatus "agent -> account overview -> 403" 403 { Invoke-RestMethod -Uri "$base/api/dashboard/account-overview" -Headers $AH }
 $products = Invoke-RestMethod -Uri "$base/api/products" -Headers $CH
+Step "active product catalogue" {
+    $codes = @($products | ForEach-Object { $_.code })
+    foreach ($code in @("SAV-001", "CC-001", "FD-001", "PERS-001")) {
+        if ($codes -notcontains $code) { throw "missing active product $code" }
+    }
+    if ($codes -contains "WM-001") { throw "legacy WM-001 is still active" }
+    if ($products[0].code -ne "SAV-001") { throw "first product is $($products[0].code), not SAV-001" }
+    $codes -join ","
+}
 
 # ---------------------------------------------------------------- application lifecycle
 $script:app1 = Post "$base/api/applications" $CH (@{ productId = $products[0].id; answers = @{ employmentStatus = "Employed"; annualIncomeBand = "60k-80k" } } | ConvertTo-Json)
@@ -133,7 +165,7 @@ Step "history after submit" {
     if (-not ($d.history | Where-Object { $_.toStatus -eq "Submitted" })) { throw "no Submitted transition recorded" }
     "$n transition(s), includes Submitted"
 }
-Step "applications list" { (Invoke-RestMethod -Uri "$base/api/applications" -Headers $CH).Count }
+Step "applications list" { (Invoke-RestMethod -Uri "$base/api/applications" -Headers $CH).items.Count }
 Step "draft is editable again (new app)" {
     $a = Post "$base/api/applications" $CH (@{ productId = $products[0].id; answers = @{ employmentStatus = "Employed" } } | ConvertTo-Json)
     (Invoke-RestMethod -Method Put -Uri "$base/api/applications/$($a.id)" -Headers $CH -ContentType "application/json" -Body (@{ answers = @{ employmentStatus = "Unemployed" } } | ConvertTo-Json)).status
@@ -146,7 +178,7 @@ Step "withdraw draft" {
 # ---------------------------------------------------------------- review: approve path
 $script:app2 = Post "$base/api/applications" $CH (@{ productId = $products[0].id; answers = @{ employmentStatus = "Employed" } } | ConvertTo-Json)
 Post "$base/api/applications/$($script:app2.id)/submit" $CH | Out-Null
-Step "review queue" { (Invoke-RestMethod -Uri "$base/api/reviews" -Headers $RH).Count }
+Step "review queue" { (Invoke-RestMethod -Uri "$base/api/reviews" -Headers $RH).items.Count }
 Step "review get" { (Invoke-RestMethod -Uri "$base/api/reviews/$($script:app2.id)" -Headers $RH).reference }
 Step "review start" { (Post "$base/api/reviews/$($script:app2.id)/start" $RH).status }
 Step "review approve" { (Post "$base/api/reviews/$($script:app2.id)/approve" $RH (@{ reason = "All checks passed" } | ConvertTo-Json)).status }
@@ -200,7 +232,7 @@ Step "magic-byte mismatch -> 400" {
 }
 
 # ---------------------------------------------------------------- notifications
-Step "notifications list" { (Invoke-RestMethod -Uri "$base/api/notifications" -Headers $CH).Count }
+Step "notifications list" { (Invoke-RestMethod -Uri "$base/api/notifications" -Headers $CH).items.Count }
 Step "unread count > 0" {
     $u = Invoke-RestMethod -Uri "$base/api/notifications/unread-count" -Headers $CH
     if ($u -lt 1) { throw "expected >0 got $u" }
@@ -219,7 +251,16 @@ Step "unread count = 0 after read-all" {
 }
 
 # ---------------------------------------------------------------- tickets + append-only children
-Step "tickets list" { (Invoke-RestMethod -Uri "$base/api/tickets" -Headers $AH).Count }
+Step "tickets list" {
+    $tickets = Invoke-RestMethod -Uri "$base/api/tickets?page=1&pageSize=50" -Headers $AH
+    if ($tickets.items.Count -lt 10) { throw "expected at least 10 seeded tickets, got $($tickets.items.Count)" }
+    $tickets.items.Count
+}
+Step "tickets overview" {
+    $o = Invoke-RestMethod -Uri "$base/api/tickets/overview" -Headers $AH
+    if ($null -eq $o.openTickets -or $null -eq $o.analyzedSentiment) { throw "missing overview metrics" }
+    "open=$($o.openTickets) analyzed=$($o.analyzedSentiment)"
+}
 $ticketId = (Invoke-RestMethod -Uri "$base/api/tickets" -Headers $AH).items[0].id
 Step "ticket get" { (Invoke-RestMethod -Uri "$base/api/tickets/$ticketId" -Headers $AH).reference }
 Step "add ticket message (append-only insert)" {
@@ -254,6 +295,12 @@ Step "ai suggest is deterministic fallback" {
     "body len=" + $r.body.Length
 }
 Step "ai sentiment" { (Post "$base/api/tickets/$ticketId/ai/analyze-sentiment" $AH $null).label }
+Step "ai sentiment persisted on ticket" {
+    $sent = Post "$base/api/tickets/$ticketId/ai/analyze-sentiment" $AH $null
+    $ticket = Invoke-RestMethod -Uri "$base/api/tickets/$ticketId" -Headers $AH
+    if ($null -eq $ticket.sentimentAnalyzedAtUtc) { throw "sentiment timestamp not persisted" }
+    "label=$($sent.label) persisted=$($ticket.latestSentiment)"
+}
 Step "ai next-best-actions" {
     $r = Post "$base/api/tickets/$ticketId/ai/next-best-actions" $AH $null
     $count = @($r.actions).Count
@@ -261,9 +308,151 @@ Step "ai next-best-actions" {
     "$count actions"
 }
 
+# ---------------------------------------------------------------- customer self-service tickets
+$script:customerTicket = $null
+Step "customer creates support ticket" {
+    $marker = "smoke-customer-ticket-$(Get-Random)"
+    $script:customerTicket = Post "$base/api/customer/tickets" $CH (@{
+        subject = "Statement question"
+        description = "Please explain a transaction. $marker"
+        category = "StatusEnquiry"
+        priority = "Normal"
+        relatedApplicationId = $null
+    } | ConvertTo-Json)
+    if ([string]::IsNullOrWhiteSpace($script:customerTicket.reference)) { throw "missing ticket reference" }
+    $script:customerTicket.reference
+}
+Step "customer lists own tickets" {
+    $list = Invoke-RestMethod -Uri "$base/api/customer/tickets?page=1&pageSize=100" -Headers $CH
+    if (-not (@($list.items) | Where-Object { $_.id -eq $script:customerTicket.id })) { throw "new ticket was not listed" }
+    @($list.items).Count
+}
+Step "customer reads own ticket detail" {
+    $detail = Invoke-RestMethod -Uri "$base/api/customer/tickets/$($script:customerTicket.id)" -Headers $CH
+    if (@($detail.messages).Count -lt 1) { throw "no opening message" }
+    if ($detail.messages[0].authorType -ne "Customer") { throw "opening author is $($detail.messages[0].authorType)" }
+    $detail.status
+}
+Step "customer detail hides agent internal notes" {
+    $note = "internal-only-smoke-$(Get-Random)"
+    Post "$base/api/tickets/$($script:customerTicket.id)/messages" $AH (@{ body = $note; isInternalNote = $true } | ConvertTo-Json) | Out-Null
+    $detail = Invoke-RestMethod -Uri "$base/api/customer/tickets/$($script:customerTicket.id)" -Headers $CH
+    if (@($detail.messages).Count -ne 1) { throw "expected only the public message, got $(@($detail.messages).Count)" }
+    if (@($detail.messages).body -contains $note) { throw "internal note leaked to customer" }
+    "hidden"
+}
+Step "customer cannot attach another customer's application" {
+    $emailB = "ticketb_$(Get-Random)@northstar.example"
+    Post "$base/api/auth/register" $null (@{ email = $emailB; password = "StrongPass#1"; firstName = "Ticket"; lastName = "B" } | ConvertTo-Json) | Out-Null
+    $b = Login $emailB "StrongPass#1"
+    $BH = @{ Authorization = "Bearer $($b.accessToken)" }
+    try {
+        Post "$base/api/customer/tickets" $BH (@{
+            subject = "Application status"
+            description = "Please check my application."
+            category = "StatusEnquiry"
+            priority = "Normal"
+            relatedApplicationId = $script:app1.id
+        } | ConvertTo-Json)
+        throw "expected 404"
+    } catch {
+        if ([int]$_.Exception.Response.StatusCode -eq 404) { "404" } else { throw }
+    }
+}
+ExpectStatus "agent -> customer ticket endpoints -> 403" 403 { Invoke-RestMethod -Uri "$base/api/customer/tickets" -Headers $AH }
+
+# ---------------------------------------------------------------- grounded AI + knowledge base
+$script:groundedTicketId = $null
+Step "locate grounded demo ticket" {
+    $all = Invoke-RestMethod -Uri "$base/api/tickets?page=1&pageSize=50" -Headers $AH
+    $t = $all.items | Where-Object { $_.reference -eq "NS-TKT-1006" } | Select-Object -First 1
+    if ($null -eq $t) { throw "seeded ticket NS-TKT-1006 was not found" }
+    $script:groundedTicketId = $t.id
+    $t.reference
+}
+Step "ai summary cites approved articles" {
+    $r = Post "$base/api/tickets/$script:groundedTicketId/ai/summarize" $AH $null
+    $sources = @($r.sources)
+    if ($sources.Count -lt 1) { throw "summary has no knowledge sources" }
+    foreach ($source in $sources) {
+        if ($source.articleCode -notmatch "^KB-\d{3}$") { throw "unexpected article code '$($source.articleCode)'" }
+        if ([string]::IsNullOrWhiteSpace($source.matchReason)) { throw "source has no match reason" }
+    }
+    "sources=$($sources.Count) $($sources[0].articleCode)"
+}
+Step "ai suggested reply cites approved articles" {
+    $r = Post "$base/api/tickets/$script:groundedTicketId/ai/suggest-response" $AH $null
+    $sources = @($r.sources)
+    if ($sources.Count -lt 1) { throw "suggested reply has no knowledge sources" }
+    "sources=$($sources.Count) requiresReview=$($r.provenance.requiresHumanReview)"
+}
+Step "grounded next-best-actions are advisory and evidenced" {
+    $r = Post "$base/api/tickets/$script:groundedTicketId/ai/next-best-actions" $AH $null
+    $actions = @($r.actions)
+    if ($actions.Count -lt 1) { throw "no actions returned" }
+    $sourceCount = 0
+    $workflowCount = 0
+    foreach ($action in $actions) {
+        if ($action.requiresHumanApproval -ne $true) { throw "action is not human-gated: $($action.actionType)" }
+        if ([string]::IsNullOrWhiteSpace($action.title)) { throw "action has no title" }
+        if ([string]::IsNullOrWhiteSpace($action.explanation)) { throw "action has no explanation" }
+        if ([string]::IsNullOrWhiteSpace($action.expectedOutcome)) { throw "action has no expected outcome" }
+        foreach ($source in @($action.sources)) {
+            if ($source.articleCode -notmatch "^KB-\d{3}$") { throw "unexpected source '$($source.articleCode)'" }
+            $sourceCount++
+        }
+        if (-not [string]::IsNullOrWhiteSpace($action.suggestedWorkflow)) { $workflowCount++ }
+    }
+    if ($sourceCount -lt 1) { throw "no action cites an approved article" }
+    if ($workflowCount -lt 1) { throw "no action suggests a safe workflow" }
+    if ($r.provenance.provider -ne "deterministic-rules") { throw "unexpected provider $($r.provenance.provider)" }
+    if ($r.provenance.isLiveInference -ne $false) { throw "fallback must not claim live inference" }
+    if ($r.provenance.requiresHumanReview -ne $true) { throw "human review flag missing" }
+    "actions=$($actions.Count) sources=$sourceCount workflows=$workflowCount"
+}
+Step "assistive classification keeps signals without changing category" {
+    $r = Post "$base/api/tickets/$script:groundedTicketId/ai/next-best-actions" $AH $null
+    if ($null -eq $r.classification) { throw "classification is missing" }
+    if ([string]::IsNullOrWhiteSpace($r.classification.suggestedCategory)) { throw "suggested category is missing" }
+    if (@($r.classification.signals).Count -lt 1) { throw "classification has no signals" }
+    $ticket = Invoke-RestMethod -Uri "$base/api/tickets/$script:groundedTicketId" -Headers $AH
+    if ($ticket.category -ne "CardTransactionDispute") { throw "AI changed the recorded category to $($ticket.category)" }
+    "suggested=$($r.classification.suggestedCategory) recorded=$($ticket.category)"
+}
+Step "knowledge base is seeded" {
+    $k = Invoke-RestMethod -Uri "$base/api/knowledge?page=1&pageSize=50" -Headers $AH
+    if ($k.totalCount -lt 20) { throw "expected at least 20 articles, got $($k.totalCount)" }
+    if ($k.items.Count -lt 20) { throw "expected at least 20 returned articles, got $($k.items.Count)" }
+    "articles=$($k.totalCount)"
+}
+Step "knowledge categories" {
+    $categories = Invoke-RestMethod -Uri "$base/api/knowledge/categories" -Headers $AH
+    if ($categories.Count -lt 4) { throw "expected at least 4 categories, got $($categories.Count)" }
+    $categories -join ","
+}
+Step "knowledge keyword search" {
+    $script:kbSearch = Invoke-RestMethod -Uri "$base/api/knowledge?search=unauthorized&page=1&pageSize=10" -Headers $AH
+    if ($script:kbSearch.items.Count -lt 1) { throw "no articles matched 'unauthorized'" }
+    $codes = @($script:kbSearch.items | ForEach-Object { $_.articleCode })
+    if ($codes -notcontains "KB-002") { throw "KB-002 was not returned: $($codes -join ',')" }
+    "matches=$($script:kbSearch.totalCount)"
+}
+Step "knowledge article detail" {
+    $kbArticle = $script:kbSearch.items | Where-Object { $_.articleCode -eq "KB-002" } | Select-Object -First 1
+    if ($null -eq $kbArticle) { throw "KB-002 was not returned by the search" }
+    $script:kbArticleId = $kbArticle.id
+    $a = Invoke-RestMethod -Uri "$base/api/knowledge/$script:kbArticleId" -Headers $AH
+    if ($a.articleCode -ne "KB-002") { throw "expected KB-002, got $($a.articleCode)" }
+    if (@($a.resolutionSteps).Count -lt 1) { throw "article has no resolution steps" }
+    if ($a.agentGuidance -notmatch "OTP") { throw "fraud guidance does not mention OTP safety" }
+    "steps=$(@($a.resolutionSteps).Count) category=$($a.category)"
+}
+ExpectStatus "customer -> knowledge search -> 403" 403 { Invoke-RestMethod -Uri "$base/api/knowledge" -Headers $CH }
+ExpectStatus "customer -> knowledge detail -> 403" 403 { Invoke-RestMethod -Uri "$base/api/knowledge/$script:kbArticleId" -Headers $CH }
+
 # ---------------------------------------------------------------- admin
 Step "admin users" { (Invoke-RestMethod -Uri "$base/api/admin/users" -Headers $XH).Count }
-Step "admin audit" { (Invoke-RestMethod -Uri "$base/api/admin/audit" -Headers $XH).Count }
+Step "admin audit" { (Invoke-RestMethod -Uri "$base/api/admin/audit" -Headers $XH).items.Count }
 Step "admin create product" {
     $code = "TST" + (Get-Random)
     $script:smokeProduct = Post "$base/api/admin/products" $XH (@{ code = $code; name = "Smoke Test Product"; summary = "Created by regression"; description = "A product created by the regression suite."; category = "savings"; eligibility = "Residents aged 18 and over."; requiredDocuments = @("ProofOfIdentity"); terms = "Standard terms apply."; minimumAge = 18; isActive = $true; displayOrder = 5 } | ConvertTo-Json)
@@ -303,6 +492,13 @@ Step "swagger json generates (upload is multipart)" {
     $ct = ($upload.requestBody.content.PSObject.Properties.Name) -join '+'
     if ($ct -notmatch "multipart/form-data") { throw "upload request body is not multipart/form-data (got '$ct')" }
     $ct
+}
+Step "AI surface has no autonomous privileged actions" {
+    $doc = Invoke-RestMethod -Uri "$base/swagger/v1/swagger.json" -UseBasicParsing
+    $aiPaths = @($doc.paths.PSObject.Properties.Name | Where-Object { $_ -match "/ai/" })
+    $mutating = @($aiPaths | Where-Object { $_ -match "(?i)(execute|apply|approve|resolve|escalate|block|refund)" })
+    if ($mutating.Count -gt 0) { throw "privileged AI route found: $($mutating -join ',')" }
+    "aiRoutes=$($aiPaths.Count) privileged=0"
 }
 
 # ---------------------------------------------------------------- tickets for customer view

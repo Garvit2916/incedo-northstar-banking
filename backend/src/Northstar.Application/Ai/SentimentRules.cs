@@ -45,12 +45,15 @@ public static class SentimentRules
             context.Subject,
             string.Join('\n', context.Conversation.Select(m => m.Body))).ToLowerInvariant();
 
-        var found = new List<string>();
+        var escalationFound = new List<string>();
+        var frustrationFound = new List<string>();
+        var urgencyFound = new List<string>();
+        var positiveFound = new List<string>();
 
-        var escalation = Collect(text, EscalationSignals, found);
-        var urgent = Collect(text, UrgentSignals, found);
-        var negative = Collect(text, NegativeSignals, found);
-        var positive = Collect(text, PositiveSignals, found);
+        var escalation = Collect(text, EscalationSignals, escalationFound);
+        var urgent = Collect(text, UrgentSignals, urgencyFound);
+        var negative = Collect(text, NegativeSignals, frustrationFound);
+        var positive = Collect(text, PositiveSignals, positiveFound);
 
         SentimentLabel label;
         string explanation;
@@ -92,12 +95,29 @@ public static class SentimentRules
                           "straightforward enquiry.";
         }
 
+        var signals = escalationFound
+            .Concat(frustrationFound)
+            .Concat(urgencyFound)
+            .Concat(positiveFound)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+
         return new AiSentiment(
             label,
             explanation,
             Confidence: null,
             escalateRecommended,
-            Signals: found.Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToList());
+            Signals: signals,
+            FrustrationIndicators: frustrationFound
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(6)
+                .ToList(),
+            UrgencyIndicators: urgencyFound
+                .Concat(escalationFound)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(6)
+                .ToList());
     }
 
     private static int Collect(string text, string[] signals, List<string> found)

@@ -36,12 +36,26 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/products', label: 'Products', icon: 'products', roles: ['Customer'] },
       { to: '/applications', label: 'My applications', icon: 'applications', roles: ['Customer'] },
+      { to: '/my-tickets', label: 'My tickets', icon: 'support', roles: ['Customer'] },
       { to: '/profile', label: 'Profile & KYC', icon: 'profile', roles: ['Customer'] },
     ],
   },
   {
     label: 'Operations',
-    items: [{ to: '/tickets', label: 'Support workspace', icon: 'support', roles: ['SupportAgent', 'Administrator'] }],
+    items: [
+      {
+        to: '/support',
+        label: 'AI support workspace',
+        icon: 'support',
+        roles: ['SupportAgent', 'Administrator'],
+      },
+      {
+        to: '/knowledge',
+        label: 'Knowledge base',
+        icon: 'file',
+        roles: ['SupportAgent', 'Administrator'],
+      },
+    ],
   },
   {
     label: 'Review',
@@ -61,10 +75,13 @@ const SEGMENT_LABELS: Record<string, string> = {
   dashboard: 'Dashboard',
   products: 'Products',
   applications: 'My applications',
+  'my-tickets': 'My tickets',
   profile: 'Profile & KYC',
   notifications: 'Notifications',
   reviews: 'Review queue',
-  tickets: 'Support workspace',
+  support: 'AI support workspace',
+  tickets: 'AI support workspace',
+  knowledge: 'Knowledge base',
   admin: 'Administration',
   users: 'Users & roles',
   audit: 'Audit log',

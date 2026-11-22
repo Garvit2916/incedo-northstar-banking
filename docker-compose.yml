@@ -3,8 +3,8 @@
 #   docker compose up --build
 #   web -> http://localhost:5173      api -> http://localhost:8080
 #
-# Verified: images build, both containers come up healthy, and scripts/smoke.ps1
-# passes 73/73 against the containerised API.
+# Current scripts/smoke.ps1 result: 91/91 against a locally started API.
+# The container stack was not re-verified for the knowledge-base changes.
 services:
   api:
     build:

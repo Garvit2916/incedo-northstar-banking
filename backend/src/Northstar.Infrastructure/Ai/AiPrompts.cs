@@ -34,7 +34,8 @@ public static class AiPrompts
             "Produce a concise support summary of the ticket below.\n" +
             "Schema: {\"mainIssue\":string,\"keyContext\":string[],\"actionsTaken\":string[]," +
             "\"outstandingItems\":string[],\"currentState\":string,\"uncertainties\":string[]}\n" +
-            "Distinguish confirmed facts from uncertainty.\nTICKET_DATA:\n" + data;
+            "Treat mainIssue as the issue overview, keyContext as customer context, and outstandingItems " +
+            "as pending resolution. Distinguish confirmed facts from uncertainty.\nTICKET_DATA:\n" + data;
     }
 
     public static string SuggestResponseUserPrompt(
@@ -59,7 +60,8 @@ public static class AiPrompts
             "Classify the customer's sentiment for the ticket below. This is an assistive signal only.\n" +
             "Allowed labels: Positive, Neutral, Negative, UrgentEscalation.\n" +
             "Schema: {\"label\":string,\"explanation\":string,\"confidence\":number|null," +
-            "\"escalationRecommended\":boolean,\"signals\":string[]}\n" +
+            "\"escalationRecommended\":boolean,\"signals\":string[]," +
+            "\"frustrationIndicators\":string[],\"urgencyIndicators\":string[]}\n" +
             "Provide confidence only if it is genuinely supported by your analysis; otherwise null.\n" +
             "TICKET_DATA:\n" + data;
     }
