@@ -34,6 +34,15 @@ public interface IUserDirectory
     Task<bool> SetActiveAsync(Guid userId, bool isActive, CancellationToken ct);
 }
 
+/// <summary>
+/// Publishes coarse-grained domain events to an external event bus. Notification
+/// content, customer identifiers and email addresses must never be included.
+/// </summary>
+public interface INotificationEventPublisher
+{
+    Task PublishAsync(NotificationEventPayload notificationEvent, CancellationToken ct);
+}
+
 /// <summary>Generates human-friendly unique references for applications and tickets.</summary>
 public interface IReferenceGenerator
 {

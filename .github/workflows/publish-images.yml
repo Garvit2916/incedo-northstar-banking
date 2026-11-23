@@ -1,0 +1,71 @@
+name: Publish container images
+
+# Builds and pushes the API and SPA images to private ECR repositories using
+# GitHub OIDC. It deliberately does not deploy or change any AWS service state.
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ecr-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    name: Build and push to ECR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-session-name: northstar-github-actions
+
+      - name: Verify assumed role
+        run: aws sts get-caller-identity
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image names
+        id: images
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          echo "backend=${ECR_REGISTRY}/${{ vars.ECR_BACKEND_REPOSITORY || 'northstar-backend' }}" >> "$GITHUB_OUTPUT"
+          echo "frontend=${ECR_REGISTRY}/${{ vars.ECR_FRONTEND_REPOSITORY || 'northstar-frontend' }}" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push API image
+        env:
+          BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
+          IMAGE_TAG: ${{ steps.images.outputs.tag }}
+        run: |
+          docker build -f backend/Dockerfile \
+            -t "${BACKEND_IMAGE}:${IMAGE_TAG}" \
+            -t "${BACKEND_IMAGE}:latest" \
+            .
+          docker push "${BACKEND_IMAGE}:${IMAGE_TAG}"
+          docker push "${BACKEND_IMAGE}:latest"
+
+      - name: Build and push SPA image
+        env:
+          FRONTEND_IMAGE: ${{ steps.images.outputs.frontend }}
+          IMAGE_TAG: ${{ steps.images.outputs.tag }}
+        run: |
+          docker build -f frontend/Dockerfile \
+            --build-arg VITE_ENABLE_DEMO_ACCOUNTS=false \
+            -t "${FRONTEND_IMAGE}:${IMAGE_TAG}" \
+            -t "${FRONTEND_IMAGE}:latest" \
+            .
+          docker push "${FRONTEND_IMAGE}:${IMAGE_TAG}"
+          docker push "${FRONTEND_IMAGE}:latest"

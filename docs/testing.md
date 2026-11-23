@@ -20,14 +20,17 @@ Expected: **0 warnings, 0 errors**.
 dotnet test Northstar.slnx
 ```
 
-Latest verified result: **219 tests passing** across the three projects below
-(Domain 108, Application 66, API integration 45), with 0 failures.
+Latest verified result: **228 tests passing** across the three projects below
+(Domain 108, Application 75, API integration 45), with 0 failures.
 
 | Project | Type | Scope |
 | --- | --- | --- |
 | `Northstar.Domain.Tests` | pure unit | `ApplicationStateMachine` transitions (allowed/forbidden), entity behaviour and invariants, ticket lifecycle, enum coverage. |
-| `Northstar.Application.Tests` | service tests | Use cases against a **real EF Core stack on in-memory SQLite**: onboarding lifecycle, review decisions, document upload/validation, notifications, ticket messages/assignment — including the append-only child and ticket-reassignment regression — customer ticket ownership/isolation/internal-note filtering, plus AI sentiment persistence, summary provenance and next-best-action shape. |
+| `Northstar.Application.Tests` | service tests | Use cases against a **real EF Core stack on in-memory SQLite**: onboarding lifecycle, review decisions, document upload/validation, notifications and outbox event safety, ticket messages/assignment — including the append-only child and ticket-reassignment regression — customer ticket ownership/isolation/internal-note filtering, plus AI sentiment persistence, summary provenance and next-best-action shape. AWS adapters and provider selection are covered with proxied SDK clients and require no credentials. |
 | `Northstar.Api.IntegrationTests` | HTTP integration | The API booted with `WebApplicationFactory<Program>`: auth, health, security headers, the authorization matrix, the full application lifecycle, operations and customer ticket endpoints, the operations overview and persisted sentiment over real HTTP. |
+
+All suites run locally with no AWS credentials, cloud resources or infrastructure
+tooling. AWS adapters are exercised with proxied SDK clients only.
 
 ### Frontend unit tests
 
@@ -95,7 +98,8 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke.ps1 -BaseUrl http://local
 - **Documents** — PDF upload (`201`), list, authenticated content, download
   link, review; `400` for unsupported extension (message lists the 4 allowed
   extensions) and magic-byte mismatch.
-- **Notifications** — list, unread count, mark one read, mark all read.
+- **Notifications** — list, unread count, mark one read, mark all read, separate
+  email/SNS outbox rows, and sanitized external event payloads.
 - **Tickets** — operations overview metrics, list, get, append message
   (append-only insert verified), internal note, assign, status change, all four
   AI endpoints (asserting the deterministic fallback provenance), and sentiment

@@ -1,9 +1,13 @@
 using System.Net.Http.Headers;
+using Amazon;
+using Amazon.S3;
+using Amazon.SimpleNotificationService;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Northstar.Application.Abstractions;
 using Northstar.Application.Configuration;
@@ -68,15 +72,28 @@ public static class DependencyInjection
 
         services.AddDbContext<AppDbContext>(options =>
         {
-            if (provider.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+            switch (provider.Trim().ToLowerInvariant())
             {
-                options.UseSqlServer(connectionString, sql =>
-                    sql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName));
-            }
-            else
-            {
-                options.UseSqlite(connectionString, sqlite =>
-                    sqlite.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName));
+                case "sqlserver":
+                    if (string.IsNullOrWhiteSpace(connectionString) ||
+                        connectionString.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            "ConnectionStrings:Default must be a SQL Server connection string when Database:Provider is SqlServer.");
+                    }
+
+                    options.UseSqlServer(connectionString, sql =>
+                        sql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName));
+                    break;
+
+                case "sqlite":
+                    options.UseSqlite(connectionString, sqlite =>
+                        sqlite.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName));
+                    break;
+
+                default:
+                    throw new InvalidOperationException(
+                        "Database:Provider must be 'Sqlite' or 'SqlServer'.");
             }
         });
     }
@@ -111,13 +128,24 @@ public static class DependencyInjection
         services.Configure<FileUploadOptions>(configuration.GetSection(FileUploadOptions.SectionName));
         services.PostConfigure<FileUploadOptions>(options => options.ApplyFallbacks());
 
+        var storageOptions = configuration.GetSection(StorageOptions.SectionName).Get<StorageOptions>()
+                             ?? new StorageOptions();
+
+        if (string.Equals(storageOptions.Provider, "S3", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<IAmazonS3>(_ => CreateS3Client(storageOptions.S3Region));
+        }
+
         services.AddScoped<IBlobStorage>(sp =>
         {
             var options = sp.GetRequiredService<IOptions<StorageOptions>>().Value;
-            if (options.Provider.Equals("Azure", StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(options.AzureConnectionString))
+            var provider = options.Provider.Trim().ToLowerInvariant();
+
+            if (provider == "s3")
             {
-                return new AzureBlobStorage(options.AzureConnectionString, options.AzureContainerName);
+                return new S3BlobStorage(
+                    sp.GetRequiredService<IAmazonS3>(),
+                    options.S3BucketName);
             }
 
             var root = Path.IsPathRooted(options.LocalRootPath)
@@ -131,18 +159,50 @@ public static class DependencyInjection
     private static void AddNotifications(IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<EmailOptions>(configuration.GetSection(EmailOptions.SectionName));
+        services.Configure<SnsOptions>(configuration.GetSection(SnsOptions.SectionName));
+
+        var snsOptions = configuration.GetSection(SnsOptions.SectionName).Get<SnsOptions>() ?? new SnsOptions();
+        var snsEnabled = !string.IsNullOrWhiteSpace(snsOptions.TopicArn);
+
+        if (snsEnabled)
+        {
+            services.AddSingleton<IAmazonSimpleNotificationService>(_ => CreateSnsClient(snsOptions.Region));
+        }
 
         services.AddScoped<IEmailSender>(sp =>
         {
             var options = sp.GetRequiredService<IOptions<EmailOptions>>().Value;
-            return options.Provider.ToLowerInvariant() switch
+            return options.Provider.Trim().ToLowerInvariant() switch
             {
                 "smtp" => ActivatorUtilities.CreateInstance<SmtpEmailSender>(sp),
                 "azurecommunication" => ActivatorUtilities.CreateInstance<AzureCommunicationEmailSender>(sp),
                 _ => ActivatorUtilities.CreateInstance<NoopEmailSender>(sp)
             };
         });
+
+        services.AddScoped<INotificationEventPublisher>(sp =>
+        {
+            if (!snsEnabled)
+            {
+                return new NoopNotificationEventPublisher();
+            }
+
+            return new SnsNotificationEventPublisher(
+                sp.GetRequiredService<IAmazonSimpleNotificationService>(),
+                snsOptions.TopicArn,
+                sp.GetRequiredService<ILogger<SnsNotificationEventPublisher>>());
+        });
     }
+
+    private static IAmazonS3 CreateS3Client(string region) =>
+        string.IsNullOrWhiteSpace(region)
+            ? new AmazonS3Client()
+            : new AmazonS3Client(RegionEndpoint.GetBySystemName(region));
+
+    private static IAmazonSimpleNotificationService CreateSnsClient(string region) =>
+        string.IsNullOrWhiteSpace(region)
+            ? new AmazonSimpleNotificationServiceClient()
+            : new AmazonSimpleNotificationServiceClient(RegionEndpoint.GetBySystemName(region));
 
     private static void AddAi(IServiceCollection services, IConfiguration configuration)
     {

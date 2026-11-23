@@ -1,9 +1,12 @@
+using System.Net;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -24,6 +27,17 @@ var builder = WebApplication.CreateBuilder(args);
 // A key set here (rather than on a local object) is visible to IOptions<JwtOptions>.
 var configuredSigningKey = builder.Configuration["Jwt:SigningKey"];
 var isLocal = builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing");
+
+// ECS sends stdout/stderr to CloudWatch. JSON logs keep structured fields queryable.
+if (!isLocal)
+{
+    builder.Logging.AddJsonConsole(options =>
+    {
+        options.IncludeScopes = true;
+        options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+        options.JsonWriterOptions = new JsonWriterOptions { Indented = false };
+    });
+}
 
 if (string.IsNullOrWhiteSpace(configuredSigningKey) || Encoding.UTF8.GetByteCount(configuredSigningKey) < 32)
 {
@@ -64,6 +78,16 @@ builder.Services
     });
 
 builder.Services.AddAuthorization();
+
+// The API sits behind the nginx sidecar inside the same Fargate task. Forwarding
+// only from loopback preserves the real client IP for rate limiting and audit.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownProxies.Clear();
+    options.KnownProxies.Add(IPAddress.Loopback);
+    options.KnownProxies.Add(IPAddress.IPv6Loopback);
+});
 
 // ---- Rate limiting ----------------------------------------------------------
 // Limits are configuration-driven so environments (including automated tests)
@@ -176,12 +200,22 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-if (!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing"))
+if (!isLocal)
 {
-    app.UseHsts();
-    app.UseHttpsRedirection();
+    // A minimal HTTP-only Fargate deployment has no TLS listener. HSTS and HTTPS
+    // redirection are opt-in so the demo does not lock browsers into HTTPS.
+    if (builder.Configuration.GetValue("Security:EnableHsts", false))
+    {
+        app.UseHsts();
+    }
+
+    if (builder.Configuration.GetValue("Security:RequireHttps", false))
+    {
+        app.UseHttpsRedirection();
+    }
 }
 
+app.UseForwardedHeaders();
 app.UseCors("spa");
 app.UseRateLimiter();
 app.UseAuthentication();
@@ -191,14 +225,13 @@ app.MapControllers();
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready");
 
-await SeedAsync(app, builder.Configuration);
+await InitializeDatabaseAsync(app, builder.Configuration);
 
 app.Run();
 
-static async Task SeedAsync(WebApplication app, IConfiguration configuration)
+static async Task InitializeDatabaseAsync(WebApplication app, IConfiguration configuration)
 {
-    var seedEnabled = configuration.GetValue("Seed:Enabled", true);
-    if (!seedEnabled || app.Environment.IsEnvironment("Testing"))
+    if (app.Environment.IsEnvironment("Testing"))
     {
         return;
     }
@@ -206,7 +239,17 @@ static async Task SeedAsync(WebApplication app, IConfiguration configuration)
     var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
     try
     {
-        await DbInitializer.InitializeAsync(app.Services, configuration, logger);
+        // Migrations and demonstration seeding are independent so production can
+        // apply schema changes without creating the well-known demo accounts.
+        if (configuration.GetValue("Database:ApplyMigrations", true))
+        {
+            await DbInitializer.MigrateAsync(app.Services, logger);
+        }
+
+        if (configuration.GetValue("Seed:Enabled", false))
+        {
+            await DbInitializer.SeedAsync(app.Services, configuration, logger);
+        }
     }
     catch (Exception ex)
     {

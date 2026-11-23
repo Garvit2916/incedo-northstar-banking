@@ -6,12 +6,17 @@
 | **Document type** | AWS production readiness and service roadmap |
 | **Version** | 1.0 |
 | **Date** | 17 November 2026 |
-| **Current AWS usage** | Amazon Bedrock only (optional live AI provider) |
+| **Current AWS usage** | Optional Bedrock AI plus application/container preparation for a manually configured ECS/RDS/S3/SNS/ECR environment |
 | **Target** | Secure, observable, highly available AWS deployment |
 
 > This document lists the AWS capabilities relevant to Northstar. It is not a
 > list of every AWS service; services unrelated to this application (for example
 > GameLift, IoT Core or Ground Station) are out of scope.
+>
+> For the subset actually implemented in this repository, see
+> [`aws-deployment.md`](aws-deployment.md). That manual deployment guide is
+> authoritative for the current scope; this roadmap remains the longer
+> production wish list. No infrastructure-as-code is included in the repository.
 
 ---
 
@@ -22,16 +27,17 @@
 | AI inference | Amazon Bedrock Converse API, optional; deterministic fallback by default | **Implemented** |
 | AWS authentication | AWS default credential chain; no keys in source | **Implemented** |
 | Bedrock guardrails | Optional `GuardrailIdentifier` / `GuardrailVersion` configuration | **Configurable, not enforced** |
-| Application hosting | Local `dotnet run`; Docker Compose | **No AWS deployment** |
-| Database | SQLite locally; SQL Server provider available | **No RDS provisioned** |
-| Document storage | Local file system or Azure Blob | **No S3 adapter** |
-| Email | No-op, SMTP or Azure Communication Services | **No SES adapter** |
-| Outbox delivery | Database outbox + hosted background service | **No SQS/EventBridge** |
-| Secrets | Configuration/environment variables | **No Secrets Manager** |
-| Observability | Application logging and health endpoints | **No CloudWatch/X-Ray** |
+| Application hosting | Local `dotnet run`, Docker Compose and container images prepared for one ECS Fargate task | **Prepared; ECS configured manually** |
+| Database | SQLite locally; SQL Server provider with migration/seeding controls | **App support implemented; RDS final configuration pending** |
+| Document storage | Local file system or `S3BlobStorage` | **Adapter implemented; bucket configured manually** |
+| Email | No-op, SMTP or Azure Communication Services | **No SES adapter**; SNS does not replace email |
+| Outbox delivery | Database outbox + hosted background service, with separate email and SNS event rows | **Implemented; no SQS/EventBridge** |
+| Secrets | Configuration/environment variables and secure task-secret values; no secret-store SDK in the app | **Store decision pending** |
+| Observability | Structured JSON logs, health endpoints and CloudWatch-compatible stdout logs | **App support implemented; CloudWatch configured manually** |
 | Security edge | Application security headers and rate limiting | **No WAF/Shield/CloudFront** |
-| Infrastructure as code | `infra/` reserved | **Not implemented** |
-| CI/CD | Local build/test commands | **No AWS pipeline** |
+| Infrastructure as code | None in this repository | **Not in current scope** |
+| CI/CD | Local commands + OIDC ECR image workflow | **Workflow present; not executed here** |
+| Ingress | Application supports forwarded headers, configurable CORS and opt-in HSTS/HTTPS | **ALB decision pending evaluation; no ingress configured in repo** |
 | Malware scanning | Development stub (`SkippedDev`) | **No AWS scanning pipeline** |
 
 ---
@@ -44,7 +50,7 @@ Route 53
    ▼
 CloudFront + AWS WAF
    ├── S3 (private SPA bucket, Origin Access Control)
-   └── Application Load Balancer
+   └── Application Load Balancer (decision pending evaluation)
              │
              ▼
        ECS Fargate service (API)
@@ -74,7 +80,7 @@ These are required to run the application securely and reliably in AWS.
 | AWS capability | Purpose in Northstar | Implementation impact |
 | --- | --- | --- |
 | **Amazon VPC** | Network isolation with public and private subnets. | Infrastructure only. |
-| **Application Load Balancer** | HTTPS entry point for the API; health checks and TLS termination. | Infrastructure only. |
+| **Application Load Balancer** | Candidate ingress for the API; health checks and TLS termination. | **Decision pending evaluation**; no ALB is configured in this repo. |
 | **Amazon ECS on Fargate** | Run the containerised API without managing servers. | Container/deployment configuration. |
 | **Amazon ECR** | Private container image registry. | CI/CD configuration. |
 | **Amazon RDS for SQL Server** | Managed, Multi-AZ database for applications, tickets and identity. | Connection-string and migration configuration. |
@@ -158,7 +164,7 @@ These are required to run the application securely and reliably in AWS.
 | **AWS Trusted Advisor** | Cost, security, fault-tolerance and service-limit recommendations. |
 | **AWS Compute Optimizer** | Right-size ECS and RDS resources. |
 
-### 3.6 CI/CD and infrastructure as code
+### 3.6 CI/CD and future infrastructure-as-code (not current scope)
 
 | AWS capability | Purpose in Northstar |
 | --- | --- |
@@ -221,9 +227,9 @@ These are required to run the application securely and reliably in AWS.
 | Enforce Bedrock Guardrails in production. | Content and sensitive-data protection. | AI configuration |
 | Enable Bedrock invocation logging. | AI audit and troubleshooting. | Bedrock/API configuration |
 | Add S3 malware-scanning integration. | Replace the development scanner stub. | Document upload workflow |
-| Add container health and readiness endpoints for ALB. | Safe target registration and rollout. | API and container configuration |
-| Add IaC for all AWS resources. | Reproducible, reviewable environments. | `infra/` |
-| Add CI/CD with OIDC. | Secure automated build and deployment. | Repository pipeline |
+| Keep health and readiness endpoints available for a future ingress decision. | Safe target registration and rollout if an ALB is chosen. | API and container configuration |
+| Evaluate IaC later. | Not part of the current manual deployment approach. | Operations decision |
+| Keep the OIDC ECR image workflow. | Secure image build/push; deployment remains manual. | `.github/workflows/publish-images.yml` |
 | Add database migration execution strategy. | Controlled schema changes in RDS. | Deployment pipeline |
 | Add S3 lifecycle and retention policies. | Cost, privacy and regulatory retention. | Infrastructure |
 | Add backup and restore runbooks. | Recoverability and disaster recovery. | Operations documentation |
@@ -234,15 +240,16 @@ These are required to run the application securely and reliably in AWS.
 
 ### 5.1 ECS task role
 
-- `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on the KYC bucket prefix.
-- `s3:ListBucket` on the KYC bucket.
+- `s3:GetObject` and `s3:PutObject` on the KYC bucket prefix.
+- `s3:ListBucket` on the KYC bucket. Do not grant `s3:DeleteObject`; there is no
+  authorized document-deletion workflow.
 - `bedrock:InvokeModel` on approved model ARNs. The Converse API is authorized
   by `bedrock:InvokeModel`; there is no `bedrock:Converse` IAM action.
 - `bedrock:GetGuardrail` and `bedrock:ApplyGuardrail` when guardrails are enabled.
 - `ses:SendEmail` and `ses:SendRawEmail` on approved identities.
 - `sqs:SendMessage`, `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility`.
 - `events:PutEvents` on approved event buses.
-- `secretsmanager:GetSecretValue` on approved secret ARNs.
+- Read only the approved values in the selected secret store.
 - `kms:Decrypt` and `kms:GenerateDataKey` on approved keys.
 - `logs:CreateLogStream` and `logs:PutLogEvents`.
 - `xray:PutTraceSegments` and `xray:PutTelemetryRecords`.
@@ -250,15 +257,13 @@ These are required to run the application securely and reliably in AWS.
 ### 5.2 ECS execution role
 
 - Pull images from ECR.
-- Read the required Secrets Manager values.
+- Read the required task-secret values from the selected secret store.
 - Write container logs to CloudWatch.
 
 ### 5.3 CI/CD role
 
 - Push images to ECR.
-- Deploy ECS services and task definitions.
-- Update CloudFormation/CDK stacks.
-- Read deployment configuration.
+- No ECS deployment or IAM changes in the current workflow.
 - No standing administrator permissions.
 
 ### 5.4 Human access
@@ -275,12 +280,12 @@ These are required to run the application securely and reliably in AWS.
 | Current setting | AWS production setting |
 | --- | --- |
 | `Database:Provider=Sqlite` | `SqlServer` on RDS. |
-| `ConnectionStrings:Default` | Secrets Manager value for RDS. |
+| `ConnectionStrings:Default` | Secure task-secret value for RDS. |
 | `Storage:Provider=Local` | `S3` with bucket, prefix, region and KMS key. |
 | `Email:Provider=Noop` | `SES` with verified domain and configuration set. |
 | `Ai:Provider=deterministic` | `bedrock` in production. |
-| `Ai:GuardrailIdentifier` / `Version` | Enforced values from Secrets Manager or Parameter Store. |
-| `Jwt:SigningKey` | Secrets Manager value with rotation procedure. |
+| `Ai:GuardrailIdentifier` / `Version` | Secure configuration values when guardrails are enabled. |
+| `Jwt:SigningKey` | Secure task-secret value with rotation procedure. |
 | `Cors:Origins` | CloudFront custom domain only. |
 | In-memory rate limiting | Distributed rate limiting or WAF rate-based rules. |
 | Local outbox worker | SQS consumer or EventBridge target. |
@@ -291,16 +296,22 @@ These are required to run the application securely and reliably in AWS.
 
 ### Phase 1 — Production baseline
 
-1. Create AWS accounts/environments and enable CloudTrail, Config and GuardDuty.
-2. Provision VPC, subnets, security groups, ALB, ECS Fargate and ECR.
-3. Provision RDS for SQL Server with Multi-AZ, encryption and backups.
-4. Create private S3 buckets for the SPA and KYC documents.
-5. Add CloudFront, WAF, ACM and Route 53.
-6. Implement S3 storage and SES email adapters.
-7. Move secrets to Secrets Manager and JWT configuration to secure storage.
-8. Configure CloudWatch logs, alarms and dashboards.
-9. Add IaC and a CI/CD pipeline with OIDC.
-10. Run the full test and smoke suites against the AWS environment.
+1. Confirm the manually created AWS resources and record their names/ARNs.
+2. Use the existing/manual network configuration. ALB/ingress remains pending
+   evaluation and no networking is created in this repository.
+3. Finalise the SQL Server/RDS configuration manually and inject the connection
+   string as a task secret.
+4. Confirm the private S3 bucket and SNS topic configuration. No repository
+   provisioning exists for either resource.
+5. Choose SSM Parameter Store or Secrets Manager and reference the approved
+   values from the ECS task definition.
+6. Keep structured JSON logs and configure the CloudWatch log group and
+   retention manually.
+7. Run the OIDC workflow to build and push images to ECR; it does not deploy.
+8. Configure the ECS Fargate task and service manually with the non-root API
+   image and nginx sidecar.
+9. Verify health, authentication, the four role journeys and the
+   document/notification flows against the deployed endpoint.
 
 ### Phase 2 — Security and operational hardening
 
@@ -335,7 +346,7 @@ These are required to run the application securely and reliably in AWS.
 
 ## 8. Acceptance criteria for AWS readiness
 
-- [ ] All infrastructure is defined as code and deploys without manual steps.
+- [ ] Manually configured infrastructure is documented and verified; IaC adoption remains a later decision.
 - [ ] No secrets are stored in source, container images or plaintext environment files.
 - [ ] The API runs as a non-root container on ECS Fargate with least-privilege roles.
 - [ ] RDS is Multi-AZ, encrypted and backed up with tested restores.
@@ -374,15 +385,18 @@ deterministic fallback and human-review provenance.
 
 To take the application to production on AWS, the priority order is:
 
-1. **Hosting and data:** ECS Fargate, ECR, RDS, S3, CloudFront and Route 53.
-2. **Security:** IAM, KMS, Secrets Manager, WAF, Shield, CloudTrail, Config,
-   GuardDuty, Inspector and Security Hub.
+1. **Hosting and data:** ECS Fargate, ECR and the final RDS/S3 configuration;
+   CloudFront and Route 53 remain future decisions.
+2. **Security:** IAM, KMS, the selected secret store, WAF, Shield, CloudTrail,
+   Config, GuardDuty, Inspector and Security Hub.
 3. **Integration:** SES, SQS, EventBridge and Lambda.
 4. **Operations:** CloudWatch, X-Ray/ADOT, AWS Backup and CI/CD with OIDC.
 5. **AI hardening:** Bedrock Guardrails, invocation logging, evaluation and
    optional Knowledge Bases.
 6. **Business value:** analytics through Firehose, Glue, Athena and QuickSight.
 
-The largest code changes are the **S3 storage adapter**, **SES email adapter**,
-**SQS/EventBridge outbox integration**, **Secrets Manager configuration**,
-**distributed rate limiting** and **observability instrumentation**.
+The main repository changes are the **S3 storage adapter**, **SNS event
+publisher and separate outbox rows**, the **runtime-configurable frontend
+upstream** and the **OIDC ECR image workflow**. The larger production items —
+SES, SQS/EventBridge, a selected secret store, distributed rate limiting and
+tracing — remain future decisions. No infrastructure-as-code is included.

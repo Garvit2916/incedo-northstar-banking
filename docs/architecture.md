@@ -86,16 +86,20 @@ Adapters and persistence. Everything external lives here.
 - **Persistence**: `AppDbContext : IdentityDbContext<ApplicationUser,
   IdentityRole<Guid>, Guid>, IApplicationDbContext`. Entity configuration is via
   `ApplyConfigurationsFromAssembly` (`Persistence/Configurations.cs`); EF
-  migrations in `Persistence/Migrations`; `DbInitializer` migrates then seeds.
+  migrations in `Persistence/Migrations`; `DbInitializer` exposes migration and
+  seeding separately so hosted environments can migrate without demo data.
 - **Identity & tokens**: `AuthService`, `TokenService`, `UserDirectory`,
   `CurrentUser`, `JwtOptions`.
-- **Storage**: `FileSystemBlobStorage` (default) and `AzureBlobStorage`,
-  selected by `Storage:Provider`.
+- **Storage**: `FileSystemBlobStorage` (default) and `S3BlobStorage`, selected by
+  `Storage:Provider`. S3 uses SSE-S3 and short-lived read-only pre-signed URLs.
 - **Email**: `NoopEmailSender`, `SmtpEmailSender`,
   `AzureCommunicationEmailSender`, selected by `Email:Provider`.
 - **AI**: `DeterministicFallbackAiProvider` (default), `AmazonBedrockAiProvider`
   (Converse API, AWS default credential chain) and `OpenAiCompatibleAiProvider`,
   wrapped by `ResilientAiProvider`.
+- **Notification events**: `NoopNotificationEventPublisher` (default) and
+  `SnsNotificationEventPublisher`, selected by whether `Sns:TopicArn` is set.
+  SNS is a coarse external signal and does not replace transactional email.
 - **Cross-cutting**: `AuditWriter`, `OutboxProcessor` (hosted service),
   `ReferenceGenerator`, `SystemDateTimeProvider`, `DevelopmentFileScanner`.
 
@@ -162,8 +166,8 @@ more information; the latter allows the customer to amend and resubmit.
 size), stored via `IBlobStorage`, recorded, and scanned by the dev scanner.
 Customers, reviewers and administrators may list and fetch content; only
 reviewers/administrators may set the review status. Downloads are served through
-the authenticated content endpoint (or a presigned URL when Azure storage is
-configured).
+the authenticated content endpoint (or a short-lived pre-signed URL when S3
+storage is configured).
 
 **Support + AI.** Agents work the three-panel support workspace: a filterable
 inbox with operations overview metrics, the conversation/composer, and the AI
@@ -197,9 +201,12 @@ drafts never request secrets or document links by email, and there is no AI
 endpoint that can execute a status change, approval, block or refund.
 
 **Notifications.** In-app notifications are queued inline within the same
-transaction as the triggering change. Outbound email is queued as an
-`OutboxMessage` and delivered asynchronously by the `OutboxProcessor`, so
-delivery failures never roll back the business transaction.
+transaction as the triggering change. Two independent `OutboxMessage` rows are
+written: `email.notification` for outbound mail and `notification.event` for a
+coarse external event. `OutboxProcessor` dispatches them through `IEmailSender`
+and `INotificationEventPublisher` respectively, so either provider can fail
+without rolling back the business transaction. The SNS payload contains only an
+enum event type, entity type, null entity id and timestamp.
 
 ## Cross-cutting concerns
 
@@ -214,3 +221,19 @@ delivery failures never roll back the business transaction.
 | Observability | Structured logging; `/health/live` and `/health/ready` |
 | Time | `IDateTimeProvider` (wraps `TimeProvider`) for testability |
 | Reference ids | `IReferenceGenerator` for human-friendly references |
+
+## AWS deployment boundaries
+
+The repository prepares the application, not the infrastructure. AWS resources
+are configured manually through the AWS Console; no infrastructure-as-code is
+included. The application supports the agreed S3, SNS, SQL Server/RDS, ECR/ECS
+Fargate and CloudWatch target through configuration and the AWS default
+credential chain. IAM grants infrastructure access only and does not replace the
+four application roles.
+
+Ingress remains an open decision: an ALB is pending evaluation, and this
+repository neither creates an ALB nor introduces an alternative networking
+architecture. `Program.cs` supports forwarded headers from the local nginx
+sidecar and keeps HSTS/HTTPS redirection opt-in so a manual ingress choice can
+supply TLS. Secrets are read as normal configuration values and can be injected
+as ECS task secrets from a manually selected secret store.

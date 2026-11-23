@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Northstar.Application.Common;
 using Northstar.Application.Contracts;
@@ -29,10 +30,43 @@ public sealed class NotificationServiceTests : IDisposable
         Assert.False(notification.IsRead);
         Assert.Null(notification.ReadAtUtc);
 
-        var outbox = Assert.Single(await _fx.Db.OutboxMessages.AsNoTracking().ToListAsync());
-        Assert.Equal("email.notification", outbox.Type);
-        Assert.Equal("test-key-1", outbox.IdempotencyKey);
-        Assert.Equal(OutboxStatus.Pending, outbox.Status);
+        var outbox = await _fx.Db.OutboxMessages.AsNoTracking().ToListAsync();
+        Assert.Equal(2, outbox.Count);
+
+        var email = Assert.Single(outbox, m => m.Type == "email.notification");
+        Assert.Equal("test-key-1", email.IdempotencyKey);
+        Assert.Equal(OutboxStatus.Pending, email.Status);
+
+        var externalEvent = Assert.Single(outbox, m => m.Type == "notification.event");
+        Assert.Equal("event:test-key-1", externalEvent.IdempotencyKey);
+        Assert.Equal(OutboxStatus.Pending, externalEvent.Status);
+    }
+
+    [Fact]
+    public async Task External_event_payload_contains_only_coarse_safe_fields()
+    {
+        var user = _fx.SeedUser();
+        _fx.Caller.UserId = user.Id;
+
+        _fx.Notifications.EnqueueNotification(
+            user.Id, null, NotificationType.General, "Welcome", "Your account is ready.", "safe-key");
+        await _fx.Db.SaveChangesAsync();
+
+        var outbox = await _fx.Db.OutboxMessages.AsNoTracking().ToListAsync();
+        var externalEvent = Assert.Single(outbox, m => m.Type == "notification.event");
+
+        using var json = JsonDocument.Parse(externalEvent.Payload);
+        var root = json.RootElement;
+
+        Assert.Equal("General", root.GetProperty("eventType").GetString());
+        Assert.Equal("Notification", root.GetProperty("entityType").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("entityId").ValueKind);
+        Assert.Equal(4, root.EnumerateObject().Count());
+
+        Assert.DoesNotContain("Welcome", externalEvent.Payload);
+        Assert.DoesNotContain("Your account is ready.", externalEvent.Payload);
+        Assert.DoesNotContain(user.Email!, externalEvent.Payload);
+        Assert.DoesNotContain(user.Id.ToString(), externalEvent.Payload);
     }
 
     [Fact]

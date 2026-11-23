@@ -6,3 +6,7 @@ backend/src/Northstar.Api/northstar.db*
 backend/src/Northstar.Api/App_Data/
 **/.vs/
 **/.git/
+.env
+.env.*
+*.pem
+*.log

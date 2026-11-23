@@ -120,9 +120,11 @@ public sealed class ApplicationServiceTests : IDisposable
         Assert.Equal(scenario.Profile.UserId, notification.UserId);
         Assert.Equal(NotificationType.ApplicationSubmitted, notification.Type);
 
-        var outbox = Assert.Single(await _fx.Db.OutboxMessages.AsNoTracking().ToListAsync());
-        Assert.Equal("email.notification", outbox.Type);
-        Assert.Equal(OutboxStatus.Pending, outbox.Status);
+        var outbox = await _fx.Db.OutboxMessages.AsNoTracking().ToListAsync();
+        Assert.Equal(2, outbox.Count);
+        Assert.Single(outbox, m => m.Type == "email.notification");
+        Assert.Single(outbox, m => m.Type == "notification.event");
+        Assert.All(outbox, m => Assert.Equal(OutboxStatus.Pending, m.Status));
     }
 
     [Fact]
@@ -213,7 +215,7 @@ public sealed class ApplicationServiceTests : IDisposable
         Assert.Equal(2, notifications.Count);
         Assert.Single(notifications, n => n.Type == NotificationType.ApplicationApproved);
         Assert.All(notifications, n => Assert.Equal(scenario.Profile.UserId, n.UserId));
-        Assert.Equal(2, await _fx.Db.OutboxMessages.AsNoTracking().CountAsync());
+        Assert.Equal(4, await _fx.Db.OutboxMessages.AsNoTracking().CountAsync());
     }
 
     [Fact]

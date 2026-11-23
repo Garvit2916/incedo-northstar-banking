@@ -53,8 +53,9 @@ public interface IDateTimeProvider
 public sealed record StoredBlob(string StorageKey, long SizeBytes, string Sha256);
 
 /// <summary>
-/// Private object storage abstraction. Local disk in development, Azure Blob
-/// Storage in the cloud. Implementations must never expose a public URL.
+/// Private object storage abstraction. Local disk in development and Amazon S3
+/// in AWS. Implementations must never expose a public URL and pre-signed links
+/// are always short-lived and read-only.
 /// </summary>
 public interface IBlobStorage
 {
@@ -65,9 +66,9 @@ public interface IBlobStorage
     Task DeleteAsync(string storageKey, CancellationToken ct);
 
     /// <summary>
-    /// Returns a short-lived, scoped access URL when the backing store supports it
-    /// (e.g. an Azure Blob SAS), otherwise null so the API can stream the content
-    /// through an authorised endpoint instead.
+    /// Returns a short-lived, read-only access URL when the backing store supports
+    /// it (e.g. an S3 pre-signed URL), otherwise null so the API can stream the
+    /// content through an authorised endpoint instead.
     /// </summary>
     Task<Uri?> GetPresignedUrlAsync(string storageKey, TimeSpan ttl, CancellationToken ct);
 }

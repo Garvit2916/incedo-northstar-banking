@@ -24,13 +24,36 @@ public static class DbInitializer
         ILogger logger,
         CancellationToken ct = default)
     {
+        await MigrateAsync(services, logger, ct);
+        await SeedAsync(services, configuration, logger, ct);
+    }
+
+    /// <summary>
+    /// Applies pending EF Core migrations without creating demonstration data.
+    /// Hosted deployments call this independently of <see cref="SeedAsync"/>.
+    /// </summary>
+    public static async Task MigrateAsync(
+        IServiceProvider services,
+        ILogger logger,
+        CancellationToken ct = default)
+    {
+        using var scope = services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        logger.LogInformation("Applying database migrations...");
+        await db.Database.MigrateAsync(ct);
+    }
+
+    public static async Task SeedAsync(
+        IServiceProvider services,
+        IConfiguration configuration,
+        ILogger logger,
+        CancellationToken ct = default)
+    {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-
-        logger.LogInformation("Applying database migrations...");
-        await db.Database.MigrateAsync(ct);
 
         await SeedRolesAsync(roleManager, logger);
         await SeedUsersAsync(userManager, db, configuration, logger, ct);

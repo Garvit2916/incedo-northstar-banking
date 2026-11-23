@@ -10,12 +10,13 @@ using Northstar.Domain.Entities;
 namespace Northstar.Application.Services;
 
 /// <summary>
-/// In-app notifications and the transactional outbox that drives email delivery.
+/// In-app notifications and the transactional outbox that drives email and
+/// coarse external event delivery.
 ///
 /// Notifications are always written in the same unit of work as the business
-/// change they describe. Email delivery is decoupled through the outbox so that
-/// a mail-provider outage can never roll back a valid decision, and the
-/// idempotency key prevents duplicate sends on retry.
+/// change they describe. Email and SNS delivery are decoupled through the outbox
+/// so that a provider outage can never roll back a valid decision, and the
+/// idempotency keys prevent duplicate delivery on retry.
 /// </summary>
 public sealed class NotificationService
 {
@@ -121,12 +122,29 @@ public sealed class NotificationService
             UpdatedAtUtc = now
         });
 
-        var payload = JsonSerializer.Serialize(new EmailNotificationPayload(userId, title, body));
+        var emailPayload = JsonSerializer.Serialize(new EmailNotificationPayload(userId, title, body));
         _db.OutboxMessages.Add(new OutboxMessage
         {
             Type = "email.notification",
-            Payload = payload,
+            Payload = emailPayload,
             IdempotencyKey = idempotencyKey,
+            Status = OutboxStatus.Pending,
+            OccurredAtUtc = now
+        });
+
+        // A separate outbox row keeps SNS publication transactional with the
+        // business change and independent of email delivery. It intentionally
+        // carries only a coarse event type and internal entity reference.
+        var eventPayload = JsonSerializer.Serialize(new NotificationEventPayload(
+            type.ToString(),
+            "Notification",
+            null,
+            now));
+        _db.OutboxMessages.Add(new OutboxMessage
+        {
+            Type = "notification.event",
+            Payload = eventPayload,
+            IdempotencyKey = $"event:{idempotencyKey}",
             Status = OutboxStatus.Pending,
             OccurredAtUtc = now
         });

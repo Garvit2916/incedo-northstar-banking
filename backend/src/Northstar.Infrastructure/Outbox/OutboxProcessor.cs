@@ -4,12 +4,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Northstar.Application.Abstractions;
+using Northstar.Application.Contracts;
 using Northstar.Domain;
 
 namespace Northstar.Infrastructure.Outbox;
 
 /// <summary>
-/// Drains the transactional outbox and dispatches email notifications.
+/// Drains the transactional outbox and dispatches email notifications and SNS
+/// notification events through separate message types.
 ///
 /// Delivery is at-least-once: on success a message is marked Sent and removed
 /// from the pending set. Failures are retried with exponential back-off and a
@@ -66,6 +68,7 @@ public sealed class OutboxProcessor : BackgroundService
         var email = scope.ServiceProvider.GetRequiredService<IEmailSender>();
         var users = scope.ServiceProvider.GetRequiredService<IUserDirectory>();
         var clock = scope.ServiceProvider.GetRequiredService<IDateTimeProvider>();
+        var events = scope.ServiceProvider.GetRequiredService<INotificationEventPublisher>();
 
         var now = clock.UtcNow;
 
@@ -93,19 +96,29 @@ public sealed class OutboxProcessor : BackgroundService
 
             try
             {
-                var payload = JsonSerializer.Deserialize<EmailNotificationPayload>(message.Payload)
-                              ?? throw new InvalidOperationException("Outbox payload could not be parsed.");
-
-                var address = await users.GetEmailAsync(payload.UserId, ct);
-                if (string.IsNullOrWhiteSpace(address))
+                if (message.Type == "notification.event")
                 {
-                    message.Status = OutboxStatus.Abandoned;
-                    message.LastError = "Recipient address could not be resolved.";
-                    message.ProcessedAtUtc = now;
-                    continue;
-                }
+                    var payload = JsonSerializer.Deserialize<NotificationEventPayload>(message.Payload)
+                                  ?? throw new InvalidOperationException("Outbox event payload could not be parsed.");
 
-                await email.SendAsync(new EmailMessage(address, payload.Subject, payload.Body), ct);
+                    await events.PublishAsync(payload, ct);
+                }
+                else
+                {
+                    var payload = JsonSerializer.Deserialize<EmailNotificationPayload>(message.Payload)
+                                  ?? throw new InvalidOperationException("Outbox payload could not be parsed.");
+
+                    var address = await users.GetEmailAsync(payload.UserId, ct);
+                    if (string.IsNullOrWhiteSpace(address))
+                    {
+                        message.Status = OutboxStatus.Abandoned;
+                        message.LastError = "Recipient address could not be resolved.";
+                        message.ProcessedAtUtc = now;
+                        continue;
+                    }
+
+                    await email.SendAsync(new EmailMessage(address, payload.Subject, payload.Body), ct);
+                }
 
                 message.Status = OutboxStatus.Sent;
                 message.ProcessedAtUtc = now;

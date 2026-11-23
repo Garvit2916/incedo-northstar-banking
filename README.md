@@ -36,6 +36,7 @@ next-best actions). Administrators manage users, products and the audit trail.
 - [Solution approach](docs/SOLUTION_APPROACH.md)
 - [Project layout](#project-layout)
 - [Docker (optional)](#docker-optional)
+- [AWS deployment](docs/aws-deployment.md)
 - [Scope & limitations](#scope--limitations)
 
 ---
@@ -52,8 +53,8 @@ Northstar.Api ──► Northstar.Infrastructure ──► Northstar.Application
 | Project | Responsibility |
 | --- | --- |
 | `Northstar.Domain` | Entities, enums, value behaviour, the `ApplicationStateMachine` workflow. No external dependencies. |
-| `Northstar.Application` | Use-case services (`ApplicationService`, `TicketService`, `DocumentService`, …), DTO contracts, validation, AI orchestration, and the ports (`IApplicationDbContext`, `IAiProvider`, `IBlobStorage`, `IEmailSender`, `IDateTimeProvider`, …). |
-| `Northstar.Infrastructure` | EF Core (`AppDbContext`), ASP.NET Identity, JWT token issuing, blob storage (local FS / Azure Blob), email senders, the outbox processor, audit writer, AI provider adapters. Implements the Application ports. |
+| `Northstar.Application` | Use-case services (`ApplicationService`, `TicketService`, `DocumentService`, …), DTO contracts, validation, AI orchestration, and the ports (`IApplicationDbContext`, `IAiProvider`, `IBlobStorage`, `IEmailSender`, `INotificationEventPublisher`, `IDateTimeProvider`, …). |
+| `Northstar.Infrastructure` | EF Core (`AppDbContext`), ASP.NET Identity, JWT token issuing, blob storage (local FS / Amazon S3), email senders, the outbox processor (email + SNS events), audit writer, AI provider adapters. Implements the Application ports. |
 | `Northstar.Api` | HTTP layer: minimal-hosting `Program`, controllers, middleware (exception handling, security headers), rate limiting, CORS, health checks, Swagger. |
 | `Northstar.Domain.Tests` / `Northstar.Application.Tests` / `Northstar.Api.IntegrationTests` | xUnit test projects (see [Testing](#testing--verification)). |
 
@@ -64,15 +65,17 @@ Controller ──► Application service ──► Domain entity ──► IAppl
                      │                                          │
                      ├─► IAuditWriter (who/what/when/where)     └─► OutboxMessage ──► OutboxProcessor ──► IEmailSender
                      └─► INotificationService (queued in-app notifications)
+                      +-> OutboxMessage -> OutboxProcessor -> INotificationEventPublisher (no-op / SNS)
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the full breakdown,
 [`docs/api.md`](docs/api.md) for the endpoint reference,
 [`docs/testing.md`](docs/testing.md) for what each test suite covers,
 [`docs/project-report.md`](docs/project-report.md) for the full project report
-(business problem, methodology, approach, requirements and deliverables) and
-[`docs/aws-production-roadmap.md`](docs/aws-production-roadmap.md) for the AWS
-production-readiness roadmap.
+(business problem, methodology, approach, requirements and deliverables),
+[`docs/aws-deployment.md`](docs/aws-deployment.md) for the prepared AWS stack,
+and [`docs/aws-production-roadmap.md`](docs/aws-production-roadmap.md) for the
+longer production-readiness roadmap.
 
 ## Technology
 
@@ -241,22 +244,28 @@ Settings live in `backend/src/Northstar.Api/appsettings.json` (overridden by
 | Section | Key | Values | Default |
 | --- | --- | --- | --- |
 | `Database` | `Provider` | `Sqlite` \| `SqlServer` | `Sqlite` |
+| `Database` | `ApplyMigrations` | boolean | `true` |
 | `ConnectionStrings` | `Default` | connection string | `Data Source=northstar.db` |
 | `Jwt` | `SigningKey` | ≥32-byte secret | dev-only key injected in Development/Testing |
-| `Storage` | `Provider` | `Local` \| `Azure` | `Local` |
+| `Storage` | `Provider` | `Local` \| `S3` | `Local` |
 | `Storage` | `LocalRootPath` | path | `App_Data/kyc` |
+| `Storage` | `S3BucketName`, `S3Region` | private bucket / optional region override | empty |
 | `Email` | `Provider` | `Noop` \| `Smtp` \| `AzureCommunication` | `Noop` |
+| `Sns` | `TopicArn`, `Region` | coarse event topic / optional region override | empty (no-op publisher) |
+| `Security` | `EnableHsts`, `RequireHttps` | boolean | `false` outside Development |
 | `Ai` | `Provider` | `deterministic` \| `bedrock` \| `openai-compatible` \| `azure-openai` | `deterministic` |
 | `Ai` | `BedrockModelId`, `Region`, `GuardrailIdentifier`, `GuardrailVersion` | Bedrock model/inference region/optional guardrail | Claude 3.5 Sonnet v2; region from the AWS credential chain |
 | `Ai` | `BaseUrl`, `ApiKey`, `Model` | OpenAI-compatible endpoint and model | unset; `gpt-4o-mini` |
 | `FileUpload` | `MaxFileSizeBytes`, `AllowedExtensions`, `AllowedContentTypes` | — | 5 MB; `.pdf/.jpg/.jpeg/.png` |
 | `Cors` | `Origins` | allowed SPA origins | `http://localhost:5173` |
 | `RateLimiting` | `Auth` / `Ai` / `Uploads` | `PermitLimit`, `WindowSeconds` | see file |
-| `Seed` | `Enabled`, `DefaultPassword` | — | `true`, dev password |
+| `Seed` | `Enabled`, `DefaultPassword` | — | disabled in base config; enabled by Development overrides |
 
 Each external concern sits behind a port, so switching provider is a
-configuration change, not a code change (Azure Blob, SMTP/Azure Communication
-email, Bedrock/OpenAI-compatible AI).
+configuration change, not a code change (local filesystem / Amazon S3 storage,
+SMTP/Azure Communication email, no-op/SNS notification events,
+Bedrock/OpenAI-compatible AI). AWS credentials are never read from these files;
+the SDK default credential chain is used in AWS.
 
 ## Security
 
@@ -270,13 +279,18 @@ email, Bedrock/OpenAI-compatible AI).
 - **Upload safety**: extension allow-list, content-type check, magic-byte
   signature validation, and a size limit.
 - **Headers**: security headers middleware (`X-Content-Type-Options: nosniff`,
-  `X-Frame-Options: DENY`, etc.) on every response; HSTS + HTTPS redirection
-  outside Development.
+  `X-Frame-Options: DENY`, etc.) on every response; HSTS + HTTPS redirection are
+  opt-in outside Development for HTTP-only Fargate demos.
+- **Document storage**: KYC blobs are private; S3 uploads use SSE-S3 and are read
+  only through short-lived pre-signed URLs. The AWS task role has no delete
+  permission.
 - **Auditing**: security-relevant actions are written to an append-only audit
   trail (`actor`, `action`, `entity`, `ip`, `correlationId`, `succeeded`).
 - **No secrets in the repo**: the signing key and all credentials are supplied
-  via configuration/environment; a dev-only key is injected automatically only
-  in Development/Testing.
+  via configuration/environment or secure task-secret values from the selected
+  secret store; a dev-only key is injected automatically only in
+  Development/Testing. SNS events contain only a coarse event type and timestamp,
+  never customer, KYC, account or email content.
 
 ## AI assistance
 
@@ -344,9 +358,8 @@ reviewed by a human.
 │       ├── lib/                       # formatting, uploads, async and policy helpers
 │       ├── pages/                     # customer, operations and admin screens
 │       └── styles/                    # tokens, base, components, layout, pages
-├── docs/                              # architecture, API and testing notes
+├── docs/                              # architecture, API, AWS and testing notes
 ├── scripts/smoke.ps1                  # live end-to-end regression suite
-├── infra/                             # reserved for infrastructure-as-code
 └── Northstar.slnx                     # solution
 ```
 
@@ -367,16 +380,34 @@ docker compose down
 
 > Requires Docker Desktop with the WSL2 backend. The API container runs in
 > `Development` (SQLite at `/data/northstar.db`, uploaded documents at
-> `/data/kyc`, seeding enabled) on the named `northstar-data` volume. The local
-> `dotnet run` + `npm run dev` workflow above remains the primary development
-> path.
+> `/data/kyc`, seeding enabled) on the named `northstar-data` volume and as a
+> non-root user. Compose sets `API_UPSTREAM=api:8080`; the same image defaults to
+> `127.0.0.1:8080` for the ECS sidecar pattern. The local `dotnet run` +
+> `npm run dev` workflow above remains the primary development path.
+
+## AWS deployment
+
+AWS resources are configured manually through the AWS Console. This repository
+contains the S3/SNS application adapters, container images and an OIDC
+image-publishing workflow; it contains **no infrastructure-as-code** and no ECS
+deployment step. Local defaults remain SQLite, local document storage,
+no AWS credentials and a no-op SNS publisher. No AWS resource was created,
+modified or deleted by this work; console-created resources remain untouched.
+The manual configuration guide is in
+[`docs/aws-deployment.md`](docs/aws-deployment.md).
 
 ## Scope & limitations
 
 - **Local-first.** The solution is provider-agnostic but ships configured for
-  local development (SQLite + local file storage + deterministic AI). Azure
-  Blob / Azure OpenAI / SMTP adapters exist but require credentials to enable.
-- **No infrastructure-as-code** is included; `infra/` is reserved.
+  local development (SQLite + local file storage + deterministic AI + no-op SNS).
+  Amazon S3 / Azure OpenAI / Bedrock / SMTP adapters exist but require
+  credentials or configuration to enable.
+- **AWS deployment is manual and not executed from this repository.** The OIDC
+  image-publishing workflow is included, but no account changes were made here.
+  RDS final configuration, secret-store selection and ALB/ingress remain manual
+  decisions pending evaluation; see
+  [`docs/aws-deployment.md`](docs/aws-deployment.md) before using AWS with real
+  data.
 - All demonstration content is **fictitious**; there is no integration with a
   core banking system, payment network or real KYC provider.
 - The file scanner is a development stub; malware scanning is out of scope.

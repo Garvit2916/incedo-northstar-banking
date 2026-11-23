@@ -3,8 +3,8 @@
 #   docker compose up --build
 #   web -> http://localhost:5173      api -> http://localhost:8080
 #
-# Current scripts/smoke.ps1 result: 91/91 against a locally started API.
-# The container stack was not re-verified for the knowledge-base changes.
+# Current scripts/smoke.ps1 result: 97/97 against a locally started API.
+# The optional container stack was not re-verified for the AWS changes.
 services:
   api:
     build:
@@ -33,6 +33,8 @@ services:
         VITE_ENABLE_DEMO_ACCOUNTS: "true"
     depends_on:
       - api
+    environment:
+      API_UPSTREAM: api:8080
     ports:
       - "5173:80"
 
