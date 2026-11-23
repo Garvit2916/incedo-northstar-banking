@@ -22,6 +22,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Diagnose GitHub OIDC claims
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('sts.amazonaws.com');
+            const payload = token.split('.')[1];
+            const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+            const claims = JSON.parse(
+              Buffer.from(normalized, 'base64').toString('utf8')
+            );
+
+            core.info(JSON.stringify({
+              issuer: claims.iss,
+              audience: claims.aud,
+              subject: claims.sub,
+              repository: claims.repository,
+              ref: claims.ref,
+              event_name: context.eventName
+            }, null, 2));
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
