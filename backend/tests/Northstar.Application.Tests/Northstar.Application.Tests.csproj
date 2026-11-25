@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Northstar.Application\Northstar.Application.csproj" />
     <ProjectReference Include="..\..\src\Northstar.Infrastructure\Northstar.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Northstar.Infrastructure.Persistence.PostgresMigrations\Northstar.Infrastructure.Persistence.PostgresMigrations.csproj" />
   </ItemGroup>
 
 </Project>

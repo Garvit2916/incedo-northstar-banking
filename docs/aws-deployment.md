@@ -13,7 +13,7 @@ the source of truth for their exact names, ARNs and configuration.
 
 | Concern | Local default | AWS target / repository support | Status |
 | --- | --- | --- | --- |
-| Database | SQLite (`Database:Provider=Sqlite`) | SQL Server provider with controlled migrations and seeding; RDS under consideration | Application support implemented; RDS configuration is a manual decision |
+| Database | SQLite (`Database:Provider=Sqlite`) | PostgreSQL (`Database:Provider=Postgres`) with a separate clean migration set; RDS configured manually | Application support implemented; no RDS resource is created or configured here |
 | KYC documents | Local filesystem (`Storage:Provider=Local`) | Private S3 bucket, SSE-S3, short-lived read-only pre-signed URLs (`Storage:Provider=S3`) | Adapter implemented; bucket configured manually |
 | External notification events | No-op publisher | SNS publisher selected when `Sns:TopicArn` is set | Adapter implemented; topic configured manually |
 | Transactional email | No-op / SMTP / Azure Communication Services | Unchanged; SNS does not replace email | Preserved |
@@ -31,7 +31,7 @@ not replace controller- and service-level authorization.
 ### Resource status
 
 **Created manually; do not recreate.** The agreed services are IAM, S3, SNS, ECR,
-ECS Fargate and CloudWatch, with a persistent database under consideration (RDS).
+ECS Fargate and CloudWatch, with PostgreSQL on Amazon RDS as the database target.
 The ECR repositories are `northstar-backend` and `northstar-frontend`. The AWS
 Console is the source of truth for exact names, ARNs and settings; this
 repository does not track them. Confirm the following before changing anything:
@@ -72,7 +72,7 @@ Ingress — decision pending evaluation; configure manually
 ECS Fargate task (awsvpc)
    ├── web : nginx :80  → proxies /api and /health to 127.0.0.1:8080
    └── api : ASP.NET Core :8080 (non-root)
-          ├── persistent SQL Server database (RDS under consideration)
+          ├── PostgreSQL on Amazon RDS (configured manually; not created here)
           ├── private S3 bucket (SSE-S3, no public access, no delete grant)
           ├── SNS topic (coarse notification events only)
           └── CloudWatch Logs
@@ -143,9 +143,9 @@ Systems Manager or Secrets Manager package.
 | Setting | Value |
 | --- | --- |
 | `ASPNETCORE_ENVIRONMENT` | `Production` |
-| `Database__Provider` | `SqlServer` |
+| `Database__Provider` | `Postgres` |
 | `Database__ApplyMigrations` | `true` for a controlled migration run, then review before future releases |
-| `ConnectionStrings__Default` | Secure task-secret value for the SQL Server connection string |
+| `ConnectionStrings__Default` | Secure task-secret value for the PostgreSQL connection string |
 | `Storage__Provider` | `S3` |
 | `Storage__S3BucketName` | Name of the manually created private bucket |
 | `Storage__S3Region` | Bucket region, or leave empty to use the SDK default region |
@@ -165,6 +165,11 @@ Seeding is disabled in the base configuration and is enabled only by the
 Development overrides (or an explicit task setting for an approved demo
 bootstrap). Keep it disabled for real data and manage users through a controlled
 process.
+
+PostgreSQL migrations live in
+`backend/src/Northstar.Infrastructure.Persistence.PostgresMigrations`, which the
+API project references. Do not point the `Postgres` provider at the SQLite
+migrations in `Northstar.Infrastructure`.
 
 ### Secret-store decision
 
@@ -212,7 +217,7 @@ It has not changed application roles, authorization or business workflows.
    environment values above.
 5. Configure ECS service networking, desired count and CloudWatch logging
    manually. Keep the task stoppable/restartable and start with one task.
-6. Connect SQL Server, S3 and SNS with the configured values and least-privilege
+6. Connect PostgreSQL, S3 and SNS with the configured values and least-privilege
    roles.
 7. Decide and configure ingress/access. ALB remains pending evaluation; do not
    add an alternative networking architecture without discussion.

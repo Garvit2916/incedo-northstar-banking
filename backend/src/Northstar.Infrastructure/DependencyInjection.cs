@@ -86,6 +86,19 @@ public static class DependencyInjection
                         sql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName));
                     break;
 
+                case "postgres":
+                case "postgresql":
+                    if (string.IsNullOrWhiteSpace(connectionString) ||
+                        connectionString.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            "ConnectionStrings:Default must be a PostgreSQL connection string when Database:Provider is Postgres.");
+                    }
+
+                    options.UseNpgsql(connectionString, postgres =>
+                        postgres.MigrationsAssembly(MigrationsAssemblyNames.Postgres));
+                    break;
+
                 case "sqlite":
                     options.UseSqlite(connectionString, sqlite =>
                         sqlite.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName));
@@ -93,7 +106,7 @@ public static class DependencyInjection
 
                 default:
                     throw new InvalidOperationException(
-                        "Database:Provider must be 'Sqlite' or 'SqlServer'.");
+                        "Database:Provider must be 'Sqlite', 'Postgres' or 'SqlServer'.");
             }
         });
     }

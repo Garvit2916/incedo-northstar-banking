@@ -5,6 +5,7 @@
     <Project Path="backend/src/Northstar.Application/Northstar.Application.csproj" />
     <Project Path="backend/src/Northstar.Domain/Northstar.Domain.csproj" />
     <Project Path="backend/src/Northstar.Infrastructure/Northstar.Infrastructure.csproj" />
+    <Project Path="backend/src/Northstar.Infrastructure.Persistence.PostgresMigrations/Northstar.Infrastructure.Persistence.PostgresMigrations.csproj" />
   </Folder>
   <Folder Name="/backend/tests/">
     <Project Path="backend/tests/Northstar.Api.IntegrationTests/Northstar.Api.IntegrationTests.csproj" />

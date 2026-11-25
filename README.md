@@ -80,7 +80,7 @@ longer production-readiness roadmap.
 ## Technology
 
 - **.NET 10** (ASP.NET Core, EF Core 10, ASP.NET Identity) — API.
-- **SQLite** (development) / **SQL Server** (production profile) via EF Core migrations.
+- **SQLite** (local default) / **PostgreSQL** (AWS target) via EF Core migrations; the existing SQL Server provider remains selectable.
 - **React 18 + TypeScript + Vite** — single-page web client.
 - **CSS custom-property design system** — shared tokens, components, layout and page styles with no UI framework dependency.
 - **JWT** bearer auth with rotating refresh tokens.
@@ -243,7 +243,7 @@ Settings live in `backend/src/Northstar.Api/appsettings.json` (overridden by
 
 | Section | Key | Values | Default |
 | --- | --- | --- | --- |
-| `Database` | `Provider` | `Sqlite` \| `SqlServer` | `Sqlite` |
+| `Database` | `Provider` | `Sqlite` \| `Postgres` \| `SqlServer` | `Sqlite` |
 | `Database` | `ApplyMigrations` | boolean | `true` |
 | `ConnectionStrings` | `Default` | connection string | `Data Source=northstar.db` |
 | `Jwt` | `SigningKey` | ≥32-byte secret | dev-only key injected in Development/Testing |
@@ -260,6 +260,14 @@ Settings live in `backend/src/Northstar.Api/appsettings.json` (overridden by
 | `Cors` | `Origins` | allowed SPA origins | `http://localhost:5173` |
 | `RateLimiting` | `Auth` / `Ai` / `Uploads` | `PermitLimit`, `WindowSeconds` | see file |
 | `Seed` | `Enabled`, `DefaultPassword` | — | disabled in base config; enabled by Development overrides |
+
+Database migrations are provider-specific. SQLite migrations remain in
+`Northstar.Infrastructure`; the clean PostgreSQL initial migration lives in
+`backend/src/Northstar.Infrastructure.Persistence.PostgresMigrations`. The API
+references that migrations project; any other host selecting `Postgres` must do
+the same. PostgreSQL selection needs only `Database__Provider=Postgres` and a
+PostgreSQL `ConnectionStrings__Default` value and does not require AWS
+credentials.
 
 Each external concern sits behind a port, so switching provider is a
 configuration change, not a code change (local filesystem / Amazon S3 storage,

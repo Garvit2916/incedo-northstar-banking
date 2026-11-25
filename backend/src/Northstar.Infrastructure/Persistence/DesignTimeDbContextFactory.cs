@@ -5,28 +5,49 @@ namespace Northstar.Infrastructure.Persistence;
 
 /// <summary>
 /// Enables `dotnet ef` tooling to construct the context without booting the API.
-/// Provider and connection string are read from configuration/environment so a
-/// migration can be produced for either SQLite (development) or SQL Server
-/// (production) without editing code.
+/// The provider and connection string are read from configuration/environment so
+/// migrations can be produced for SQLite, PostgreSQL or SQL Server without editing
+/// code. Each provider has its own migration assembly.
 /// </summary>
 public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
 {
     public AppDbContext CreateDbContext(string[] args)
     {
         var provider = Environment.GetEnvironmentVariable("Database__Provider") ?? "Sqlite";
-        var connection = Environment.GetEnvironmentVariable("ConnectionStrings__Default")
-                         ?? (provider.Equals("SqlServer", StringComparison.OrdinalIgnoreCase)
-                             ? "Server=(localdb)\\MSSQLLocalDB;Database=Northstar;Trusted_Connection=True;TrustServerCertificate=True"
-                             : "Data Source=northstar.db");
+        var connection = Environment.GetEnvironmentVariable("ConnectionStrings__Default");
 
         var builder = new DbContextOptionsBuilder<AppDbContext>();
-        if (provider.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+
+        switch (provider.Trim().ToLowerInvariant())
         {
-            builder.UseSqlServer(connection);
-        }
-        else
-        {
-            builder.UseSqlite(connection);
+            case "sqlite":
+                builder.UseSqlite(
+                    connection ?? "Data Source=northstar.db",
+                    sqlite => sqlite.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName));
+                break;
+
+            case "postgres":
+            case "postgresql":
+                if (string.IsNullOrWhiteSpace(connection))
+                {
+                    throw new InvalidOperationException(
+                        "Set ConnectionStrings__Default before running EF tooling for PostgreSQL.");
+                }
+
+                builder.UseNpgsql(
+                    connection,
+                    postgres => postgres.MigrationsAssembly(MigrationsAssemblyNames.Postgres));
+                break;
+
+            case "sqlserver":
+                builder.UseSqlServer(
+                    connection ?? "Server=(localdb)\\MSSQLLocalDB;Database=Northstar;Trusted_Connection=True;TrustServerCertificate=True",
+                    sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName));
+                break;
+
+            default:
+                throw new InvalidOperationException(
+                    "Database:Provider must be 'Sqlite', 'Postgres' or 'SqlServer'.");
         }
 
         return new AppDbContext(builder.Options, TimeProvider.System);
