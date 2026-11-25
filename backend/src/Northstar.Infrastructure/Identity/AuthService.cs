@@ -1,6 +1,7 @@
 using FluentValidation;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Northstar.Application.Abstractions;
 using Northstar.Application.Contracts;
 using Northstar.Domain;
@@ -25,6 +26,7 @@ public sealed class AuthService : IAuthService
     private readonly IAuditWriter _audit;
     private readonly IValidator<RegisterRequest> _registerValidator;
     private readonly IValidator<LoginRequest> _loginValidator;
+    private readonly ILogger<AuthService> _logger;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
@@ -34,7 +36,8 @@ public sealed class AuthService : IAuthService
         ICurrentUser currentUser,
         IAuditWriter audit,
         IValidator<RegisterRequest> registerValidator,
-        IValidator<LoginRequest> loginValidator)
+        IValidator<LoginRequest> loginValidator,
+        ILogger<AuthService> logger)
     {
         _userManager = userManager;
         _db = db;
@@ -44,6 +47,7 @@ public sealed class AuthService : IAuthService
         _audit = audit;
         _registerValidator = registerValidator;
         _loginValidator = loginValidator;
+        _logger = logger;
     }
 
     public async Task<AuthResult> RegisterAsync(RegisterRequest request, CancellationToken ct)
@@ -72,7 +76,22 @@ public sealed class AuthService : IAuthService
             return AuthResult.Failure(created.Errors.Select(e => e.Description).ToArray());
         }
 
-        await _userManager.AddToRoleAsync(user, Roles.Customer);
+        try
+        {
+            var roleResult = await _userManager.AddToRoleAsync(user, Roles.Customer);
+            if (!roleResult.Succeeded)
+            {
+                var errors = await RemoveNewUserAsync(user, roleResult.Errors.Select(e => e.Description));
+                return AuthResult.Failure(errors.ToArray());
+            }
+        }
+        catch
+        {
+            // The duplicate-email check above guarantees this is the user created by
+            // this call, not a pre-existing account. Preserve the original failure.
+            await RemoveNewUserAsync(user, Array.Empty<string>());
+            throw;
+        }
 
         _db.CustomerProfiles.Add(new CustomerProfile
         {
@@ -215,6 +234,37 @@ public sealed class AuthService : IAuthService
 
         var roles = await _userManager.GetRolesAsync(user);
         return new MeResponse(user.Id, user.Email ?? string.Empty, user.FullName, roles.ToList(), user.IsActive);
+    }
+
+    private async Task<IReadOnlyList<string>> RemoveNewUserAsync(
+        ApplicationUser user,
+        IEnumerable<string> originalErrors)
+    {
+        var errors = originalErrors.ToList();
+
+        try
+        {
+            var deleted = await _userManager.DeleteAsync(user);
+            if (!deleted.Succeeded)
+            {
+                var cleanupErrors = deleted.Errors.Select(e => e.Description).ToArray();
+                _logger.LogError(
+                    "Failed to remove newly registered user {UserId} after role assignment failure: {Errors}",
+                    user.Id,
+                    string.Join("; ", cleanupErrors));
+                errors.Add("Registration cleanup failed; see server logs.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to remove newly registered user {UserId} after role assignment failure.",
+                user.Id);
+            errors.Add("Registration cleanup failed; see server logs.");
+        }
+
+        return errors;
     }
 
     private async Task<AuthResponse> IssueTokensAsync(

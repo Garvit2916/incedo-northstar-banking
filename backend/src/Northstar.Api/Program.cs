@@ -246,6 +246,13 @@ static async Task InitializeDatabaseAsync(WebApplication app, IConfiguration con
             await DbInitializer.MigrateAsync(app.Services, logger);
         }
 
+        // Opt-in role bootstrap: creates only missing roles and never invokes
+        // general seeding or demonstration data.
+        if (configuration.GetValue("Database:EnsureRoles", false))
+        {
+            await DbInitializer.EnsureRolesAsync(app.Services, logger);
+        }
+
         if (configuration.GetValue("Seed:Enabled", false))
         {
             await DbInitializer.SeedAsync(app.Services, configuration, logger);

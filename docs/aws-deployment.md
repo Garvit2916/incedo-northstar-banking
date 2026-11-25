@@ -145,6 +145,7 @@ Systems Manager or Secrets Manager package.
 | `ASPNETCORE_ENVIRONMENT` | `Production` |
 | `Database__Provider` | `Postgres` |
 | `Database__ApplyMigrations` | `true` for a controlled migration run, then review before future releases |
+| `Database__EnsureRoles` | `true` for a controlled role-only bootstrap, then `false` for normal operation |
 | `ConnectionStrings__Default` | Secure task-secret value for the PostgreSQL connection string |
 | `Storage__Provider` | `S3` |
 | `Storage__S3BucketName` | Name of the manually created private bucket |
@@ -159,8 +160,10 @@ Systems Manager or Secrets Manager package.
 | `Cors__Origins__0` | The approved public SPA origin; leave the ALB/domain decision explicit |
 | `Security__EnableHsts` / `Security__RequireHttps` | `false` only while HTTPS is not guaranteed; enable both behind HTTPS |
 
-`Database:ApplyMigrations` and `Seed:Enabled` are independent, so an environment
-can apply schema migrations without creating the well-known demo accounts.
+`Database:ApplyMigrations`, `Database:EnsureRoles` and `Seed:Enabled` are
+independent. Once the Identity schema exists, roles can be bootstrapped without
+applying migrations or creating the well-known demo accounts; `EnsureRoles` only
+creates missing roles through ASP.NET Core Identity `RoleManager`.
 Seeding is disabled in the base configuration and is enabled only by the
 Development overrides (or an explicit task setting for an approved demo
 bootstrap). Keep it disabled for real data and manage users through a controlled

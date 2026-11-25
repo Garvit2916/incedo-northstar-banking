@@ -245,6 +245,7 @@ Settings live in `backend/src/Northstar.Api/appsettings.json` (overridden by
 | --- | --- | --- | --- |
 | `Database` | `Provider` | `Sqlite` \| `Postgres` \| `SqlServer` | `Sqlite` |
 | `Database` | `ApplyMigrations` | boolean | `true` |
+| `Database` | `EnsureRoles` | boolean | `false` |
 | `ConnectionStrings` | `Default` | connection string | `Data Source=northstar.db` |
 | `Jwt` | `SigningKey` | ≥32-byte secret | dev-only key injected in Development/Testing |
 | `Storage` | `Provider` | `Local` \| `S3` | `Local` |
@@ -260,6 +261,9 @@ Settings live in `backend/src/Northstar.Api/appsettings.json` (overridden by
 | `Cors` | `Origins` | allowed SPA origins | `http://localhost:5173` |
 | `RateLimiting` | `Auth` / `Ai` / `Uploads` | `PermitLimit`, `WindowSeconds` | see file |
 | `Seed` | `Enabled`, `DefaultPassword` | — | disabled in base config; enabled by Development overrides |
+
+`Database:EnsureRoles=true` creates only the four missing Identity roles. It is
+independent of `Seed:Enabled` and does not create demo users or other seed data.
 
 Database migrations are provider-specific. SQLite migrations remain in
 `Northstar.Infrastructure`; the clean PostgreSQL initial migration lives in

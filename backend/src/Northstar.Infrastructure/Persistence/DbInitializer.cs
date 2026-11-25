@@ -44,6 +44,39 @@ public static class DbInitializer
         await db.Database.MigrateAsync(ct);
     }
 
+    /// <summary>
+    /// Creates only missing application roles. This is deliberately independent of
+    /// <see cref="SeedAsync"/>, which also creates demonstration data.
+    /// </summary>
+    public static async Task EnsureRolesAsync(
+        IServiceProvider services,
+        ILogger logger,
+        CancellationToken ct = default)
+    {
+        using var scope = services.CreateScope();
+        var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+
+        foreach (var role in Roles.All)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (await roleManager.RoleExistsAsync(role))
+            {
+                continue;
+            }
+
+            var result = await roleManager.CreateAsync(new IdentityRole<Guid>(role));
+            if (!result.Succeeded)
+            {
+                throw new InvalidOperationException(
+                    $"Could not create application role '{role}': " +
+                    string.Join("; ", result.Errors.Select(e => e.Description)));
+            }
+
+            logger.LogInformation("Seeded role {Role}.", role);
+        }
+    }
+
     public static async Task SeedAsync(
         IServiceProvider services,
         IConfiguration configuration,
