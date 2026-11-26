@@ -11,5 +11,9 @@
     <Project Path="backend/tests/Northstar.Api.IntegrationTests/Northstar.Api.IntegrationTests.csproj" />
     <Project Path="backend/tests/Northstar.Application.Tests/Northstar.Application.Tests.csproj" />
     <Project Path="backend/tests/Northstar.Domain.Tests/Northstar.Domain.Tests.csproj" />
+    <Project Path="backend/tests/Northstar.DataMigration.Tests/Northstar.DataMigration.Tests.csproj" />
+  </Folder>
+  <Folder Name="/backend/tools/">
+    <Project Path="backend/tools/Northstar.DataMigration/Northstar.DataMigration.csproj" />
   </Folder>
 </Solution>
